@@ -13,6 +13,7 @@ import { MultiServiceAccessory } from './multiServiceAccessory';
 export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service = this.api.hap.Service;
   public readonly Characteristic: typeof Characteristic = this.api.hap.Characteristic;
+  public readonly AdaptiveLightingController = this.api.hap.AdaptiveLightingController;
 
   // this is used to track restored cached accessories
   public readonly accessories: PlatformAccessory[] = [];
@@ -234,4 +235,3 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     return new MultiServiceAccessory(this, accessory, capabilities);
   }
 }
-

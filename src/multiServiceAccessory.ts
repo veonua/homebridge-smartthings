@@ -13,13 +13,16 @@ import { LockService } from './services/lockService';
 import { DoorService } from './services/doorService';
 import { SwitchService } from './services/switchService';
 import { LightService } from './services/lightService';
+import { AirQualityService } from './services/airQualityService';
+import { DustSensorService } from './services/dustSensorService';
 import { FanSwitchLevelService } from './services/fanSwitchLevelService';
+import { ThermostatService } from './services/thermostatService';
 import { OccupancySensorService } from './services/occupancySensorService';
 import { LeakDetectorService } from './services/leakDetector';
 import { SmokeDetectorService } from './services/smokeDetector';
 import { CarbonMonoxideDetectorService } from './services/carbonMonoxideDetector';
 import { ValveService } from './services/valveService';
-import { FanSpeedService } from './services/fanSpeedService copy';
+import { FanSpeedService } from './services/fanSpeedService';
 
 
 /**
@@ -39,6 +42,7 @@ export class MultiServiceAccessory extends BasePlatformAccessory {
 
   // Order of these matters.  Make sure secondary capabilities like 'battery' and 'contactSensor' are at the end.
   private static capabilityMap = {
+    'thermostatHeatingSetpoint': ThermostatService,
     'doorControl': DoorService,
     'lock': LockService,
     // 'switch': SwitchService,
@@ -49,6 +53,8 @@ export class MultiServiceAccessory extends BasePlatformAccessory {
     'presenceSensor': OccupancySensorService,
     'temperatureMeasurement': TemperatureService,
     'relativeHumidityMeasurement': HumidityService,
+    'carbonDioxideMeasurement': AirQualityService,
+    'dustSensor': DustSensorService,
     'illuminanceMeasurement': LightSensorService,
     'contactSensor': ContactSensorService,
     'battery': BatteryService,
