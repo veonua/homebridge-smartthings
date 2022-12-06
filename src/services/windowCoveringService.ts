@@ -3,7 +3,7 @@ import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 
-export class WindowCoveriingService extends BaseService {
+export class WindowCoveringService extends BaseService {
   private targetPosition = 0;
   private timer;
   private states = {

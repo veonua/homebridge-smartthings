@@ -22,6 +22,7 @@ import { LeakDetectorService } from './services/leakDetector';
 import { SmokeDetectorService } from './services/smokeDetector';
 import { CarbonMonoxideDetectorService } from './services/carbonMonoxideDetector';
 import { ValveService } from './services/valveService';
+import { WindowCoveringService } from './services/windowCoveringService';
 import { FanSpeedService } from './services/fanSpeedService';
 
 
@@ -42,6 +43,7 @@ export class MultiServiceAccessory extends BasePlatformAccessory {
 
   // Order of these matters.  Make sure secondary capabilities like 'battery' and 'contactSensor' are at the end.
   private static capabilityMap = {
+    'windowShadeLevel': WindowCoveringService,
     'thermostatHeatingSetpoint': ThermostatService,
     'doorControl': DoorService,
     'lock': LockService,

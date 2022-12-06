@@ -18,9 +18,11 @@ export class ThermostatService extends BaseService {
       .onGet(this.getTargetHeatingCoolingState.bind(this))
       .onSet(this.setTargetHeatingCoolingState.bind(this));
 
-    this.service.getCharacteristic(platform.Characteristic.RotationSpeed)
-      .onSet(this.setLevel.bind(this))
-      .onGet(this.getLevel.bind(this));
+    if (this.findCapability('fanSpeed')) {
+      this.service.getCharacteristic(platform.Characteristic.RotationSpeed)
+        .onSet(this.setLevel.bind(this))
+        .onGet(this.getLevel.bind(this));
+    }
 
     this.service.getCharacteristic(platform.Characteristic.TargetTemperature)
       .setProps({
@@ -39,8 +41,10 @@ export class ThermostatService extends BaseService {
     if (pollSwitchesAndLightsSeconds > 0) {
       multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getTargetHeatingCoolingState.bind(this), this.service,
         platform.Characteristic.TargetHeatingCoolingState);
-      multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getLevel.bind(this), this.service,
-        platform.Characteristic.RotationSpeed);
+      if (this.findCapability('fanSpeed')) {
+        multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getLevel.bind(this), this.service,
+          platform.Characteristic.RotationSpeed);
+      }
     }
   }
 
@@ -138,7 +142,7 @@ export class ThermostatService extends BaseService {
           return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
         }
 
-        if (this.deviceStatus.status.fanSpeed.fanSpeed.value !== undefined) {
+        if (this.deviceStatus?.status?.fanSpeed?.fanSpeed?.value !== undefined) {
           level = this.deviceStatus.status.fanSpeed.fanSpeed.value;
           let pct;
           if (level === 0) {
