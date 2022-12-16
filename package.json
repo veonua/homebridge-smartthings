@@ -2,7 +2,7 @@
   "private": true,
   "displayName": "SmartThings (Veon)",
   "name": "homebridge-smartthings-veon",
-  "version": "2.4.16",
+  "version": "2.4.19",
   "description": "Connects SmartThings devices to Homebridge.  Automatically discovers devices.",
   "license": "Apache-2.0",
   "repository": {
