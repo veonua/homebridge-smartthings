@@ -1,5 +1,5 @@
 {
-  "pluginAlias": "TestHomeBridgeSmartThings",
+  "pluginAlias": "VeoSmartThings",
   "pluginType": "platform",
   "singular": true,
   "schema": {

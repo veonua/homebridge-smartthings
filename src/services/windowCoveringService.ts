@@ -22,7 +22,7 @@ export class WindowCoveringService extends BaseService {
     this.service.getCharacteristic(platform.Characteristic.CurrentPosition)
       .onGet(this.getCurrentPosition.bind(this));
     this.service.getCharacteristic(platform.Characteristic.PositionState)
-      .onGet(this.getCurrentPositionState.bind(this));
+      .onGet(this.getPositionState.bind(this));
     this.service.getCharacteristic(platform.Characteristic.TargetPosition)
       .onGet(this.getTargetPosition.bind(this))
       .onSet(this.setTargetPosition.bind(this));
@@ -35,7 +35,6 @@ export class WindowCoveringService extends BaseService {
   async setTargetPosition(value: CharacteristicValue) {
 
     // TODO: Modify me!
-
     this.log.debug('Received setTargetPosition(' + value + ') event for ' + this.name);
 
     this.targetPosition = value as number;
@@ -53,7 +52,6 @@ export class WindowCoveringService extends BaseService {
 
         // Poll every 2 seconds
         this.timesAtSameLevel = 0;
-        this.shadeState = this.platform.Characteristic.PositionState.STOPPED;
         this.timer = setInterval(this.pollShadeLevel.bind(this), 2000);
       })
       .catch(reason => {
@@ -85,7 +83,6 @@ export class WindowCoveringService extends BaseService {
         this.log.debug(`${this.name} close to target postion of ${this.targetPosition}.  Close enough!`);
         this.service.updateCharacteristic(this.platform.Characteristic.CurrentPosition, this.targetPosition);
         clearInterval(this.timer);
-        this.shadeState = this.states.stopped;
         return;
       }
 
@@ -95,18 +92,10 @@ export class WindowCoveringService extends BaseService {
         if (++this.timesAtSameLevel > 5) {
           // After 10 seconds at same level, we're done.
           clearInterval(this.timer);
-          this.shadeState = this.states.stopped;
           this.log.debug(`${this.name} appears to have stopped.  Will stop polling`);
         }
       } else {
         this.timesAtSameLevel = 0;
-        if (currentPostion < this.lastPolledShadeLevel) {
-          this.log.debug(`${this.name} appears to be lowering (decreasing)`);
-          this.shadeState = this.states.decreasing;
-        } else {
-          this.log.debug(`${this.name} appears to be raising (increasing)`);
-          this.shadeState = this.states.increasing;
-        }
         this.lastPolledShadeLevel = currentPostion;
 
         // Stop polling after 2 minutes
@@ -118,13 +107,12 @@ export class WindowCoveringService extends BaseService {
     });
   }
 
-  getTargetPosition(): number {
-    return this.targetPosition;
+  getPositionState(): number {
+    return this.shadeState;
   }
 
-  async getCurrentPositionState(): Promise<CharacteristicValue> {
-    this.log.debug('Received getCurrentPosition() event for ' + this.name);
-    return this.getCurrentPosition();
+  getTargetPosition(): number {
+    return this.targetPosition;
   }
 
   /**
@@ -155,6 +143,16 @@ export class WindowCoveringService extends BaseService {
 
         if (success) {
           const position = this.deviceStatus.status.windowShadeLevel.shadeLevel.value;
+          const shadeState = this.deviceStatus.status.windowShade?.windowShade?.value;
+
+          if (shadeState === 'opening') {
+            this.shadeState = this.states.increasing;
+          } else if (shadeState === 'closing') {
+            this.shadeState = this.states.decreasing;
+          } else {
+            this.shadeState = this.states.stopped;
+          }
+
           this.log.debug('onGet() SUCCESSFUL for ' + this.name + '. value = ' + position);
           resolve(position);
         } else {
@@ -164,11 +162,5 @@ export class WindowCoveringService extends BaseService {
       });
     });
   }
-
-  getPositionState(): number {
-    this.log.debug('GetPositionState called, value: ' + this.shadeState);
-    return this.shadeState;
-  }
-
 
 }

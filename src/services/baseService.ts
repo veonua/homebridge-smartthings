@@ -35,8 +35,7 @@ export class BaseService {
   }
 
   protected setServiceType(serviceType: WithUUID<typeof Service>) {
-    this.service = this.accessory.getService(serviceType) ||
-    this.accessory.addService(serviceType);
+    this.service = this.accessory.getService(serviceType) || this.accessory.addService(serviceType);
 
     this.service.setCharacteristic(this.platform.Characteristic.Name, this.accessory.context.device.label);
   }
