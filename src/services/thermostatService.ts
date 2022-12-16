@@ -77,7 +77,7 @@ export class ThermostatService extends BaseService {
       this.getStatus().then(success => {
         if (success) {
           const status = this.deviceStatus.status;
-          if (status.thermostatMode === undefined) {
+          if (status.thermostatMode === undefined || status.thermostatMode.value === 'eco') {
             resolve(this.platform.Characteristic.TargetHeatingCoolingState.AUTO);
             return;
           }

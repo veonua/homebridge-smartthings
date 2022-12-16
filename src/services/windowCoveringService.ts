@@ -22,7 +22,7 @@ export class WindowCoveringService extends BaseService {
     this.service.getCharacteristic(platform.Characteristic.CurrentPosition)
       .onGet(this.getCurrentPosition.bind(this));
     this.service.getCharacteristic(platform.Characteristic.PositionState)
-      .onGet(this.getPositionState.bind(this));
+      .onGet(this.getCurrentPosition.bind(this));
     this.service.getCharacteristic(platform.Characteristic.TargetPosition)
       .onGet(this.getTargetPosition.bind(this))
       .onSet(this.setTargetPosition.bind(this));
@@ -162,7 +162,6 @@ export class WindowCoveringService extends BaseService {
    *
    * If your device takes time to respond you should update the status of your device
    * asynchronously instead using the `updateCharacteristic` method instead.
-
    * @example
    * this.service.updateCharacteristic(this.platform.Characteristic.On, true)
    */
@@ -181,15 +180,15 @@ export class WindowCoveringService extends BaseService {
 
         if (success) {
           const position = this.deviceStatus.status.windowShadeLevel.shadeLevel.value;
-          const shadeState = this.deviceStatus.status.windowShade?.windowShade?.value;
+          // const shadeState = this.deviceStatus.status.windowShade?.windowShade?.value;
 
-          if (shadeState === 'opening') {
-            this.shadeState = this.states.increasing;
-          } else if (shadeState === 'closing') {
-            this.shadeState = this.states.decreasing;
-          } else {
-            this.shadeState = this.states.stopped;
-          }
+          // if (shadeState === 'opening') {
+          //   this.shadeState = this.states.increasing;
+          // } else if (shadeState === 'closing') {
+          //   this.shadeState = this.states.decreasing;
+          // } else {
+          //   this.shadeState = this.states.stopped;
+          // }
 
           this.log.debug('onGet() SUCCESSFUL for ' + this.name + '. value = ' + position);
           resolve(position);
