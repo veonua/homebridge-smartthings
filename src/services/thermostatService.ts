@@ -3,7 +3,11 @@ import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 
-const stateMap = ['off', 'heat', 'cool', 'auto'];
+const stateMap =
+{ 'off' : 0, 'heat' : 1, 'cool' : 2,
+  'auto':3, 'eco':3, 'energysaveheat':3};
+
+const stateMapRev = { 0: 'off', 1: 'heat', 2: 'cool', 3: 'auto'};
 
 export class ThermostatService extends BaseService {
 
@@ -57,7 +61,7 @@ export class ThermostatService extends BaseService {
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
 
-    const targetState = stateMap[+value];
+    const targetState = stateMapRev[+value];
     this.multiServiceAccessory.sendCommand('thermostatMode', 'setThermostatMode', [targetState] ).then((success) => {
       if (success) {
         this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
@@ -77,12 +81,12 @@ export class ThermostatService extends BaseService {
       this.getStatus().then(success => {
         if (success) {
           const status = this.deviceStatus.status;
-          if (status.thermostatMode === undefined || status.thermostatMode.value === 'eco') {
+          if (status.thermostatMode === undefined) {
             resolve(this.platform.Characteristic.TargetHeatingCoolingState.AUTO);
             return;
           }
 
-          const value = stateMap.indexOf(status.thermostatMode.thermostatMode.value);
+          const value = stateMap[status.thermostatMode.thermostatMode.value];
           resolve(value);
         } else {
           reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));

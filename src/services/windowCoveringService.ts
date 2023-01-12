@@ -22,7 +22,7 @@ export class WindowCoveringService extends BaseService {
     this.service.getCharacteristic(platform.Characteristic.CurrentPosition)
       .onGet(this.getCurrentPosition.bind(this));
     this.service.getCharacteristic(platform.Characteristic.PositionState)
-      .onGet(this.getCurrentPosition.bind(this));
+      .onGet(this.getCurrentPositionState.bind(this));
     this.service.getCharacteristic(platform.Characteristic.TargetPosition)
       .onGet(this.getTargetPosition.bind(this))
       .onSet(this.setTargetPosition.bind(this));
