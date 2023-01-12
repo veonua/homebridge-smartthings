@@ -43,13 +43,20 @@ export class ThermostatService extends BaseService {
     }
 
     if (pollSensors > 0) {
-      multiServiceAccessory.startPollingState(pollSensors, this.getCurrentHeatingCoolingState.bind(this), this.service,
-        platform.Characteristic.CurrentHeatingCoolingState, platform.Characteristic.TargetHeatingCoolingState,
-        this.getTargetHeatingCoolingState.bind(this));
+      multiServiceAccessory.startPollingState(pollSensors, this.getTargetHeatingCoolingState.bind(this), this.service,
+        platform.Characteristic.TargetHeatingCoolingState);
+      if (this.findCapability('fanSpeed')) {
+        multiServiceAccessory.startPollingState(pollSensors, this.getLevel.bind(this), this.service,
+          platform.Characteristic.RotationSpeed);
+      }
 
-      multiServiceAccessory.startPollingState(pollSensors, this.getCurrentTemperature.bind(this), this.service,
-        platform.Characteristic.CurrentTemperature,
-        platform.Characteristic.TargetTemperature, this.getTargetTemperature.bind(this));
+      // multiServiceAccessory.startPollingState(pollSensors, this.getCurrentHeatingCoolingState.bind(this), this.service,
+      //   platform.Characteristic.CurrentHeatingCoolingState, platform.Characteristic.TargetHeatingCoolingState,
+      //   this.getTargetHeatingCoolingState.bind(this));
+
+      // multiServiceAccessory.startPollingState(pollSensors, this.getCurrentTemperature.bind(this), this.service,
+      //   platform.Characteristic.CurrentTemperature,
+      //   platform.Characteristic.TargetTemperature, this.getTargetTemperature.bind(this));
     }
   }
 

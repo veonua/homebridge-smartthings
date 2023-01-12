@@ -16,13 +16,12 @@ import { LightService } from './services/lightService';
 import { AirQualityService } from './services/airQualityService';
 import { DustSensorService } from './services/dustSensorService';
 import { FanSwitchLevelService } from './services/fanSwitchLevelService';
-import { ThermostatService } from './services/thermostatService';
 import { OccupancySensorService } from './services/occupancySensorService';
 import { LeakDetectorService } from './services/leakDetector';
 import { SmokeDetectorService } from './services/smokeDetector';
 import { CarbonMonoxideDetectorService } from './services/carbonMonoxideDetector';
 import { ValveService } from './services/valveService';
-import { FanSpeedService } from './services/fanSpeedService copy';
+import { FanSpeedService } from './services/fanSpeedService';
 import { WindowCoveringService } from './services/windowCoveringService';
 import { ThermostatService } from './services/thermostatService';
 
