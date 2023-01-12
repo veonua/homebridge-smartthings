@@ -14,10 +14,10 @@ export class ThermostatService extends BaseService {
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
     super(platform, accessory, multiServiceAccessory, name, deviceStatus);
-    this.setServiceType(platform.Service.Thermostat);
 
+    this.setServiceType(platform.Service.Thermostat);
     // Set the event handlers
-    this.log.debug(`++ Adding ThermostatService to ${this.name}`);
+    this.log.debug(`Adding ThermostatService to ${this.name}`);
     this.service.getCharacteristic(platform.Characteristic.TargetHeatingCoolingState)
       .onGet(this.getTargetHeatingCoolingState.bind(this))
       .onSet(this.setTargetHeatingCoolingState.bind(this));
@@ -37,18 +37,19 @@ export class ThermostatService extends BaseService {
       .onSet(this.setTargetTemperature.bind(this));
 
 
-    let pollSwitchesAndLightsSeconds = 10; // default to 10 seconds
-    if (this.platform.config.PollSwitchesAndLightsSeconds !== undefined) {
-      pollSwitchesAndLightsSeconds = this.platform.config.PollSwitchesAndLightsSeconds;
+    let pollSensors = 10; // default to 10 seconds
+    if (this.platform.config.PollSensorsSeconds !== undefined) {
+      pollSensors = this.platform.config.PollSensorsSeconds;
     }
 
-    if (pollSwitchesAndLightsSeconds > 0) {
-      multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getTargetHeatingCoolingState.bind(this), this.service,
-        platform.Characteristic.TargetHeatingCoolingState);
-      if (this.findCapability('fanSpeed')) {
-        multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getLevel.bind(this), this.service,
-          platform.Characteristic.RotationSpeed);
-      }
+    if (pollSensors > 0) {
+      multiServiceAccessory.startPollingState(pollSensors, this.getCurrentHeatingCoolingState.bind(this), this.service,
+        platform.Characteristic.CurrentHeatingCoolingState, platform.Characteristic.TargetHeatingCoolingState,
+        this.getTargetHeatingCoolingState.bind(this));
+
+      multiServiceAccessory.startPollingState(pollSensors, this.getCurrentTemperature.bind(this), this.service,
+        platform.Characteristic.CurrentTemperature,
+        platform.Characteristic.TargetTemperature, this.getTargetTemperature.bind(this));
     }
   }
 
@@ -192,7 +193,6 @@ export class ThermostatService extends BaseService {
         const value = this.deviceStatus.status.thermostatHeatingSetpoint.heatingSetpoint.value;
         const current = this.deviceStatus.status.temperatureMeasurement?.temperature?.value?? value;
         this.service.setCharacteristic(this.platform.Characteristic.CurrentTemperature, current);
-
         resolve(value);
       });
     });
