@@ -1,6 +1,7 @@
 import { PlatformAccessory, Logger, API, Characteristic, CharacteristicValue, Service, WithUUID } from 'homebridge';
 import axios = require('axios');
 import { IKHomeBridgeHomebridgePlatform } from './platform';
+import { ShortEvent } from './webhook/subscriptionHandler';
 
 type DeviceStatus = {
   timestamp: number;
@@ -22,7 +23,7 @@ export abstract class BasePlatformAccessory {
 
   protected accessory: PlatformAccessory;
   protected platform: IKHomeBridgeHomebridgePlatform;
-  protected name: string;
+  public readonly name: string;
   protected characteristic: typeof Characteristic;
   protected log: Logger;
   protected baseURL: string;
@@ -38,8 +39,13 @@ export abstract class BasePlatformAccessory {
   protected giveUpTime = 0;
   protected commandInProgress = false;
   protected lastCommandCompleted = 0;
+
   protected statusQueryInProgress = false;
   protected lastStatusResult = true;
+
+  get id() {
+    return this.accessory.UUID;
+  }
 
   constructor(
     platform: IKHomeBridgeHomebridgePlatform,
@@ -79,7 +85,13 @@ export abstract class BasePlatformAccessory {
           this.online = false;
         }
       });
+    // if (this.name === 'Test Lock') {
+    //   platform.subscriptionHandler.addSubscription(this);
+    // }
   }
+
+  public abstract processEvent(event: ShortEvent):void;
+
 
   // Called by subclasses to refresh the status for the device.  Will only refresh if it has been more than
   // 4 seconds since last refresh
@@ -133,6 +145,10 @@ export abstract class BasePlatformAccessory {
   protected startPollingState(pollSeconds: number, getValue: () => Promise<CharacteristicValue>, service: Service,
     chracteristic: WithUUID<new () => Characteristic>, targetStateCharacteristic?: WithUUID<new () => Characteristic>,
     getTargetState?: () => Promise<CharacteristicValue>):NodeJS.Timer|void {
+
+    if (this.platform.config.WebhookToken && this.platform.config.WebhookToken !== '') {
+      return;  // Don't poll if we have a webhook token
+    }
     if (pollSeconds > 0) {
       return setInterval(() => {
         // If we are in the middle of a commmand call, or it hasn't been at least 10 seconds, we don't want to poll.
@@ -197,12 +213,14 @@ export abstract class BasePlatformAccessory {
         this.axInstance.post(this.commandURL, commandBody).then(() => {
           this.log.debug(`${command} successful for ${this.name}`);
           this.deviceStatus.timestamp = 0; // Force a refresh on next poll after a state change
+          this.commandInProgress = false;
+          resolve(true);
           // Force a small delay so that status fetch is correct
-          setTimeout(() => {
-            this.log.debug(`Delay complete for ${this.name}`);
-            this.commandInProgress = false;
-            resolve(true);
-          }, 500);
+          // setTimeout(() => {
+          //   this.log.debug(`Delay complete for ${this.name}`);
+          //   this.commandInProgress = false;
+          //   resolve(true);
+          // }, 1500);
         }).catch((error) => {
           this.commandInProgress = false;
           this.log.error(`${command} failed for ${this.name}: ${error}`);

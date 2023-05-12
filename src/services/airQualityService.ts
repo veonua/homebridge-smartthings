@@ -5,9 +5,10 @@ import { MultiServiceAccessory } from '../multiServiceAccessory';
 
 export class AirQualityService extends SensorService {
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
+  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
+    multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
-    super(platform, accessory, multiServiceAccessory, name, deviceStatus);
+    super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.initService(platform.Service.AirQualitySensor, platform.Characteristic.AirQuality, (status) => {
       const co2 = status.carbonDioxideMeasurement.carbonDioxide.value;

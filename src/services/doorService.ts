@@ -2,16 +2,18 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class DoorService extends BaseService {
   private targetState = this.platform.Characteristic.TargetDoorState.OPEN;
   private doorInTransitionStart = 0;
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
+  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
+    multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
     // This can either be a Door or Garage Door Opener
 
-    super(platform, accessory, multiServiceAccessory, name, deviceStatus);
+    super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
     this.setServiceType(platform.Service.GarageDoorOpener);
     // Set the event handlers
     this.log.debug(`Adding DoorService to ${this.name}`);
@@ -94,7 +96,8 @@ export class DoorService extends BaseService {
     this.multiServiceAccessory.sendCommand('doorControl', command).then((success) => {
       if (success) {
         this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-        this.deviceStatus.timestamp = 0;  // Force refresh
+        this.multiServiceAccessory.forceNextStatusRefresh();
+        // this.deviceStatus.timestamp = 0;  // Force refresh
       } else {
         this.log.error(`Command failed for ${this.name}`);
       }
@@ -114,28 +117,36 @@ export class DoorService extends BaseService {
           const doorState = this.deviceStatus.status.doorControl.door.value;
           this.log.debug(`DoorState value from ${this.name}: ${doorState}`);
 
-          switch (doorState) {
-            case 'closed':
-              resolve(this.platform.Characteristic.CurrentDoorState.CLOSED);
-              break;
-            case 'closing':
-              resolve(this.platform.Characteristic.CurrentDoorState.CLOSING);
-              break;
-            case 'open':
-              resolve(this.platform.Characteristic.CurrentDoorState.OPEN);
-              break;
-            case 'opening':
-              resolve(this.platform.Characteristic.CurrentDoorState.OPENING);
-              break;
-            default: {
-              this.log.error(`Unsupported door state ${doorState} for ${this.name}`);
-              reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-            }
-          }
+          resolve(this.mapDoorState(doorState));
         } else {
           reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
         }
       });
     });
+  }
+
+  public processEvent(event: ShortEvent): void {
+    this.service.updateCharacteristic(this.platform.Characteristic.CurrentDoorState, this.mapDoorState(event.value));
+    if (event.value === 'closed' || event.value === 'closing') {
+      this.service.updateCharacteristic(this.platform.Characteristic.TargetDoorState, this.platform.Characteristic.TargetDoorState.CLOSED);
+    } else {
+      this.service.updateCharacteristic(this.platform.Characteristic.TargetDoorState, this.platform.Characteristic.TargetDoorState.OPEN);
+    }
+  }
+
+  private mapDoorState(doorState: string): CharacteristicValue {
+    switch (doorState) {
+      case 'closed':
+        return(this.platform.Characteristic.CurrentDoorState.CLOSED);
+      case 'closing':
+        return(this.platform.Characteristic.CurrentDoorState.CLOSING);
+      case 'open':
+        return(this.platform.Characteristic.CurrentDoorState.OPEN);
+      case 'opening':
+        return(this.platform.Characteristic.CurrentDoorState.OPENING);
+      default: {
+        return(this.platform.Characteristic.CurrentDoorState.CLOSED);
+      }
+    }
   }
 }

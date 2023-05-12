@@ -2,6 +2,7 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
+//import { ShortEvent } from '../webhook/subscriptionHandler';
 
 const stateMap =
 { 'off' : 0, 'heat' : 1, 'cool' : 2,
@@ -15,15 +16,18 @@ export class ThermostatService extends BaseService {
   units = 'C';
   supportsOperatingState = false;
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
+  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
+    multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
-    super(platform, accessory, multiServiceAccessory, name, deviceStatus);
+    super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.setServiceType(platform.Service.Thermostat);
     // Set the event handlers
     this.log.debug(`Adding ThermostatService to ${this.name}`);
 
-    if (this.multiServiceAccessory.capabilities.find((c) => c.id === 'thermostatOperatingState')) {
+    const component = this.multiServiceAccessory.components.find((c) => c.componentId === componentId);
+    if (component && component.capabilities.find((cap) => cap === 'thermostatOperatingState')) {
+    //if (this.multiServiceAccessory.capabilities.find((c) => c.id === 'thermostatOperatingState')) {
       this.supportsOperatingState = true;
     }
     //this.service.getCharacteristic(platform.Characteristic.CurrentHeatingCoolingState)
@@ -114,7 +118,8 @@ export class ThermostatService extends BaseService {
     });
   }
 
-  async setLevel(value: CharacteristicValue): Promise<void> {
+  async setLevel(valueS: CharacteristicValue): Promise<void> {
+    const value = +valueS;
     this.log.debug('Received setLevel(' + value + ') event for ' + this.name);
 
     return new Promise<void>((resolve, reject) => {
@@ -230,5 +235,21 @@ export class ThermostatService extends BaseService {
     const convertedTemp = this.units === 'F' ? (value as number * (9/5)) + 32 : value;
 
     this.multiServiceAccessory.sendCommand(capability, command, [convertedTemp]);
+  }
+
+  // DISPLAY UNITS
+  getTemperatureDisplayUnits(): CharacteristicValue {
+    this.log.debug('Received getTemperatureDislayUnits for ' + this.name);
+    if (this.units === 'C') {
+      return this.platform.Characteristic.TemperatureDisplayUnits.CELSIUS;
+    } else {
+      return this.platform.Characteristic.TemperatureDisplayUnits.FAHRENHEIT;
+    }
+  }
+
+  setTemperatureDisplayUnits(value: CharacteristicValue) {
+    // Nothing to do as there is no way to send this off to Smartthings
+    this.log.debug(`Received request to set display units to ${value}.  No equivalent in Smartthings...`);
+    return;
   }
 }

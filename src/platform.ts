@@ -2,8 +2,9 @@ import { API, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, 
 
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import axios = require('axios');
-import { BasePlatformAccessory } from './basePlatformAccessory';
+//import { BasePlatformAccessory } from './basePlatformAccessory';
 import { MultiServiceAccessory } from './multiServiceAccessory';
+import { SubscriptionHandler } from './webhook/subscriptionHandler';
 
 /**
  * HomebridgePlatform
@@ -30,6 +31,8 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     headers: this.headerDict,
   });
 
+  private accessoryObjects: MultiServiceAccessory[] = [];
+  private subscriptionHandler: SubscriptionHandler|undefined = undefined;
 
   constructor(
     public readonly log: Logger,
@@ -61,6 +64,12 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
         }
         this.discoverDevices(devices);
         this.unregisterDevices(devices);
+        // Start subscription service if we have a webhook token
+        if (config.WebhookToken && config.WebhookToken !== '') {
+          this.subscriptionHandler = new SubscriptionHandler(this, this.accessoryObjects);
+          this.subscriptionHandler.startService();
+        }
+
       }).catch(reason => {
         this.log.error(`Could not load devices from Smartthings: ${reason}.  Check your configuration`);
       });
@@ -106,7 +115,22 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
 
       this.axInstance.get(command).then((res) => {
         res.data.items.forEach((device) => {
-          if (this.config.IgnoreDevices && this.config.IgnoreDevices.find(d => d.toLowerCase() === device.label.toLowerCase())) {
+          // If an apostrophe is included in the name of the device in SmartThings, it comes over as a Right Single
+          // quote which will not match with a single quote in the config.  This replaces it so it will match
+          if (!device.label) {
+            device.label = 'Missing Name';
+          }
+          let deviceName = '';
+          try {
+            // deviceName = device.label.toString().replaceAll(String.fromCharCode(8217), '\'');
+            deviceName = device.label;
+          } catch(error) {
+            this.log.warn(`Error getting device name for ${device.label}: ${error}`);
+            deviceName = device.label;
+          }
+          if (this.config.IgnoreDevices &&
+          //this.config.IgnoreDevices.find(d => d.replaceAll(String.fromCharCode(8217), '\'').toLowerCase() === deviceName.toLowerCase())) {
+            this.config.IgnoreDevices.find(d => d.toLowerCase() === deviceName.toLowerCase())) {
             this.log.info(`Ignoring ${device.label} because it is in the Ignore Devices list`);
             return;
           }
@@ -182,7 +206,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
 
           // create the accessory handler for the restored accessory
           // this is imported from `platformAccessory.ts`
-          this.createAccessoryObject(device, existingAccessory);
+          this.accessoryObjects.push(this.createAccessoryObject(device, existingAccessory));
 
           // it is possible to remove platform accessories at any time using `api.unregisterPlatformAccessories`, eg.:
           // remove platform accessories when no longer present
@@ -202,7 +226,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
           // create the accessory handler for the newly create accessory
           // this is imported from `platformAccessory.ts`
 
-          this.createAccessoryObject(device, accessory);
+          this.accessoryObjects.push(this.createAccessoryObject(device, accessory));
 
           // link the accessory to your platform
           this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
@@ -222,16 +246,21 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     }
   }
 
-  createAccessoryObject(device, accessory): BasePlatformAccessory {
-    const component = device.components.find(c => c.id === 'main');
+  createAccessoryObject(device, accessory): MultiServiceAccessory {
+    // const component = device.components.find(c => c.id === 'main');
 
-    let capabilities;
-    if (component) {
-      capabilities = component.capabilities;
-    } else {
-      capabilities = device.components[0].capabilities;
-    }
+    // let capabilities;
+    // if (component) {
+    //   capabilities = component.capabilities;
+    // } else {
+    //   capabilities = device.components[0].capabilities;
+    // }
 
-    return new MultiServiceAccessory(this, accessory, capabilities);
+    const acc =  new MultiServiceAccessory(this, accessory);
+    device.components.forEach(component => {
+      acc.addComponent(component.id, component.capabilities.map((c) => c.id));
+    });
+
+    return acc;
   }
 }

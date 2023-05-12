@@ -2,14 +2,16 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class LockService extends BaseService {
   private targetState = 0;
   private lockInTransitionStart = 0;
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
+  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
+    multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
-    super(platform, accessory, multiServiceAccessory, name, deviceStatus);
+    super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.setServiceType(platform.Service.LockMechanism);
     // Set the event handlers
@@ -83,7 +85,8 @@ export class LockService extends BaseService {
     this.multiServiceAccessory.sendCommand('lock', value ? 'lock' : 'unlock').then((success) => {
       if (success) {
         this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-        this.deviceStatus.timestamp = 0; // Force refresh
+        this.multiServiceAccessory.forceNextStatusRefresh();
+        // this.deviceStatus.timestamp = 0; // Force refresh
       } else {
         this.log.error(`Command failed for ${this.name}`);
       }
@@ -102,25 +105,39 @@ export class LockService extends BaseService {
         if (success) {
           const lockState = this.deviceStatus.status.lock.lock.value;
           this.log.debug(`LockState value from ${this.name}: ${lockState}`);
-
-          switch (lockState) {
-            case 'locked': {
-              resolve(this.platform.Characteristic.LockCurrentState.SECURED);
-              break;
-            }
-            case 'unlocked':
-            case 'unlocked with timeout': {
-              resolve(this.platform.Characteristic.LockCurrentState.UNSECURED);
-              break;
-            }
-            default: {
-              resolve(this.platform.Characteristic.LockCurrentState.UNKNOWN);
-            }
-          }
+          resolve(this.mapLockState(lockState));
         } else {
           reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
         }
       });
     });
+  }
+
+  public processEvent(event: ShortEvent): void {
+    this.log.debug(`Event updating lock capability for ${this.name} to ${event.value}`);
+    this.service.updateCharacteristic(this.platform.Characteristic.LockCurrentState, this.mapLockState(event.value));
+    if (event.value === 'locked') {
+      this.targetState = this.platform.Characteristic.LockTargetState.SECURED;
+      this.service.updateCharacteristic(this.platform.Characteristic.LockTargetState, this.targetState);
+    } else {
+      this.targetState = this.platform.Characteristic.LockTargetState.UNSECURED;
+      this.service.updateCharacteristic(this.platform.Characteristic.LockTargetState, this.targetState);
+    }
+  }
+
+  public mapLockState(lockState:string): CharacteristicValue {
+    switch (lockState) {
+      case 'locked': {
+        return(this.platform.Characteristic.LockCurrentState.SECURED);
+      }
+      case 'unlocked':
+      case 'unlocked with timeout': {
+        return(this.platform.Characteristic.LockCurrentState.UNSECURED);
+      }
+      default: {
+        return(this.platform.Characteristic.LockCurrentState.UNKNOWN);
+      }
+    }
+
   }
 }

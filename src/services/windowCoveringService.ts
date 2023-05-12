@@ -2,6 +2,7 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class WindowCoveringService extends BaseService {
   private targetPosition = 0;
@@ -12,9 +13,12 @@ export class WindowCoveringService extends BaseService {
     stopped: this.platform.Characteristic.PositionState.STOPPED,
   };
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
+  private currentPositionState = this.states.stopped;
+
+  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
+    multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
-    super(platform, accessory, multiServiceAccessory, name, deviceStatus);
+    super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.setServiceType(platform.Service.WindowCovering);
     // Set the event handlers
@@ -27,15 +31,15 @@ export class WindowCoveringService extends BaseService {
       .onGet(this.getTargetPosition.bind(this))
       .onSet(this.setTargetPosition.bind(this));
 
-    let pollSwitchesAndLightsSeconds = 10; // default to 10 seconds
-    if (this.platform.config.PollSwitchesAndLightsSeconds !== undefined) {
-      pollSwitchesAndLightsSeconds = this.platform.config.PollSwitchesAndLightsSeconds;
+    let pollWindowShadesSeconds = 10; // default to 10 seconds
+    if (this.platform.config.PollWindowShadesSeconds !== undefined) {
+      pollWindowShadesSeconds = this.platform.config.PollSwitchesAndLightsSeconds;
     }
 
-    if (pollSwitchesAndLightsSeconds > 0) {
-      multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getCurrentPosition.bind(this), this.service,
+    if (pollWindowShadesSeconds > 0) {
+      multiServiceAccessory.startPollingState(pollWindowShadesSeconds, this.getCurrentPosition.bind(this), this.service,
         platform.Characteristic.CurrentPosition, platform.Characteristic.TargetPosition, this.getTargetPosition.bind(this));
-      multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getCurrentPositionState.bind(this), this.service,
+      multiServiceAccessory.startPollingState(pollWindowShadesSeconds, this.getCurrentPositionState.bind(this), this.service,
         platform.Characteristic.PositionState);
     }
 
@@ -59,6 +63,7 @@ export class WindowCoveringService extends BaseService {
     this.multiServiceAccessory.sendCommand('windowShadeLevel', 'setShadeLevel', [value])
       .then(() => {
         this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
+        this.multiServiceAccessory.forceNextStatusRefresh();
         // this.pollTry = 0;
         // this.log.debug('Polling shade status...');
 
@@ -136,18 +141,36 @@ export class WindowCoveringService extends BaseService {
   }
 
   async getCurrentPositionState(): Promise<CharacteristicValue> {
-    this.log.debug('Received getCurrentPosition() event for ' + this.name);
+    this.log.debug('Received getCurrentPositionState() event for ' + this.name);
     return new Promise((resolve, reject) => {
-      this.getCurrentPosition().then(currentPosition => {
-        if (Math.abs(this.targetPosition - (currentPosition as number)) <= 5) {
-          resolve(this.platform.Characteristic.PositionState.STOPPED);
-        } else if (this.targetPosition > currentPosition) {
-          resolve(this.platform.Characteristic.PositionState.INCREASING);
+      this.getStatus().then(success => {
+        if (success) {
+          const state = this.deviceStatus.status.windowShade.windowShade;
+          if (state === 'opening') {
+            this.currentPositionState = this.states.decreasing;
+          } else if (state === 'closing') {
+            this.currentPositionState = this.states.increasing;
+          } else {
+            this.currentPositionState = this.states.stopped;
+          }
+          this.log.debug(`getCurrentPositionState() SUCCESSFUL for ${this.name} return value ${state}, ` +
+            `setting to ${this.currentPositionState}`);
+          resolve(this.currentPositionState);
         } else {
-          resolve(this.platform.Characteristic.PositionState.DECREASING);
+          this.log.error('getCurrentPositionState() FAILED for ' + this.name);
+          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
         }
-      }).catch(() => {
-        reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
+        // this.getCurrentPosition().then(currentPosition => {
+        //   if (Math.abs(this.targetPosition - (currentPosition as number)) <= 5) {
+        //     resolve(this.platform.Characteristic.PositionState.STOPPED);
+        //   } else if (this.targetPosition > Number(currentPosition)) {
+        //     resolve(this.platform.Characteristic.PositionState.INCREASING);
+        //   } else {
+        //     resolve(this.platform.Characteristic.PositionState.DECREASING);
+        //   }
+        // }).catch(() => {
+        //   reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
+        // });
       });
     });
   }
@@ -199,6 +222,25 @@ export class WindowCoveringService extends BaseService {
       });
     });
   }
+
+  public processEvent(event: ShortEvent): void {
+    if (event.capability === 'windowShadeLevel') {
+      this.log.debug(`Event updating windowShadeLevel capability for ${this.name} to ${event.value}`);
+      this.service.updateCharacteristic(this.platform.Characteristic.CurrentPosition, event.value);
+    } else if (event.capability === 'windowShade') {
+      this.log.debug(`Event updating windowShade capability for ${this.name} to ${event.value}`);
+      if (event.value === 'opening') {
+        this.currentPositionState = this.states.decreasing;
+      } else if (event.value === 'closing') {
+        this.currentPositionState = this.states.increasing;
+      } else {
+        this.currentPositionState = this.states.stopped;
+      }
+      this.log.debug(`From event, setting characteristic to ${this.currentPositionState}`);
+      this.service.updateCharacteristic(this.platform.Characteristic.PositionState, this.currentPositionState);
+    }
+  }
+
 
   // getPositionState(): number {
   //   this.log.debug('GetPositionState called, value: ' + this.shadeState);

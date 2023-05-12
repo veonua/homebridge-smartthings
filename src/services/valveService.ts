@@ -2,12 +2,14 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class ValveService extends BaseService {
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
+  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
+    multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
-    super(platform, accessory, multiServiceAccessory, name, deviceStatus);
+    super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.setServiceType(platform.Service.Valve);
     // Set the event handlers
@@ -50,11 +52,18 @@ export class ValveService extends BaseService {
     this.multiServiceAccessory.sendCommand('valve', command).then((success) => {
       if (success) {
         this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-        this.deviceStatus.timestamp = 0; // Force refresh
+        this.multiServiceAccessory.forceNextStatusRefresh();
+        // this.deviceStatus.timestamp = 0; // Force refresh
       } else {
         this.log.error(`Command failed for ${this.name}`);
       }
     });
+  }
+
+  public processEvent(event: ShortEvent): void {
+    this.log.debug(`Event updating valve capability for ${this.name} to ${event.value}`);
+    this.service.updateCharacteristic(this.platform.Characteristic.Active,
+      event.value === 'open' ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE);
   }
 
 

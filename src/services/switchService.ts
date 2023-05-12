@@ -2,12 +2,14 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class SwitchService extends BaseService {
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
+  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities:string[],
+    multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
-    super(platform, accessory, multiServiceAccessory, name, deviceStatus);
+    super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.setServiceType(platform.Service.Switch);
     // Set the event handlers
@@ -38,7 +40,8 @@ export class SwitchService extends BaseService {
     this.multiServiceAccessory.sendCommand('switch', value ? 'on' : 'off').then((success) => {
       if (success) {
         this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-        this.deviceStatus.timestamp = 0;  // Force a refresh next query.
+        this.multiServiceAccessory.forceNextStatusRefresh();
+        // this.deviceStatus.timestamp = 0;  // Force a refresh next query.
       } else {
         this.log.error(`Command failed for ${this.name}`);
       }
@@ -67,5 +70,12 @@ export class SwitchService extends BaseService {
         }
       });
     });
+  }
+
+  public processEvent(event: ShortEvent): void {
+    if (event.capability === 'switch') {
+      this.log.debug(`Event updating switch capability for ${this.name} to ${event.value}`);
+      this.service.updateCharacteristic(this.platform.Characteristic.On, event.value === 'on');
+    }
   }
 }

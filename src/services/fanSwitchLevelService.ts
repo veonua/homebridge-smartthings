@@ -2,12 +2,14 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class FanSwitchLevelService extends BaseService {
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
+  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilitites: string[],
+    multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
-    super(platform, accessory, multiServiceAccessory, name, deviceStatus);
+    super(platform, accessory, componentId, capabilitites, multiServiceAccessory, name, deviceStatus);
     this.setServiceType(platform.Service.Fan);
 
     // Set the event handlers
@@ -81,7 +83,8 @@ export class FanSwitchLevelService extends BaseService {
       this.multiServiceAccessory.sendCommand('switchLevel', 'setLevel', [value]).then(success => {
         if (success) {
           this.log.debug('setLevel(' + value + ') SUCCESSFUL for ' + this.name);
-          this.deviceStatus.timestamp = 0;
+          this.multiServiceAccessory.forceNextStatusRefresh();
+          // this.deviceStatus.timestamp = 0;
           resolve();
         } else {
           this.log.error(`Failed to send setLevel command for ${this.name}`);
@@ -117,5 +120,20 @@ export class FanSwitchLevelService extends BaseService {
         }
       });
     });
+  }
+
+  public processEvent(event: ShortEvent): void {
+    switch (event.capability) {
+      case 'switch': {
+        this.log.debug(`Event updating switch capability for ${this.name} to ${event.value}`);
+        this.service.updateCharacteristic(this.platform.Characteristic.On, event.value === 'on');
+        return;
+      }
+
+      case 'switchLevel': {
+        this.log.debug(`Event updating switchLevel capability for ${this.name} to ${event.value}`);
+        this.service.updateCharacteristic(this.platform.Characteristic.RotationSpeed, event.value);
+      }
+    }
   }
 }

@@ -13,6 +13,47 @@ This is yet another smartthings plugin for Homebridge.  This requires no access 
 require a lot of work to install.  It will discover devices automatically as well as unregister devices that are removed
 from your smarttthings network.  This is currently under development.
 
+## Fixed in version 1.5.10-beta.0, beta.1
+## Fixed in version 1.5.9
+* Removed the check for the apostrophe as it caused more issues than solved.  With this change, if you try to add a device
+that has a label like "bill's iphone" it may not get excluded, but it solves other issues.
+* Update dependencies
+## Fixed in version 1.5.7 - 1.5.8
+* Issue in some cases where a device label is a number or some non-string type, there would be a failure when setting up the devices.
+This occured after release 1.5.2.
+## Fixed in version 1.5.6
+* Handle missing device label (name)
+## Fixed in version 1.5.5
+* If smartthings returns an invalid status value on a sensor device, it will retry 5 times before removing the service.
+
+## Fixed in version 1.5.4
+Corrected status handling for mult-component devices.
+## Fixed in version 1.5.3
+* Fixed double push issue on buttons
+
+## New in version 1.5.2
+* Support for multi-component devices
+* Support for buttons - requires subscription to the webhook service.  See the announcement [here](https://github.com/iklein99/homebridge-smartthings/discussions/141).
+<p>
+IMPORTANT: Multi-button devices get loaded into the home app with the button numbers not always in the order that they
+are on the device.  Also, some devices, like the Aeotec Fob Remote will show 1 more button than there are on the device.
+This is because the device reports a main component with a button along with one component for each button.  You will find
+that in this case, one of the buttons in the Home app acts as a master, so it will fire for any of the other buttons. 
+</p>
+<p>
+In order to see which buttons are which, you can observe the animation in the Home app as you press buttons so you know how to set up
+actions per button.
+</p>
+
+## Fixed in version 1.5.2
+* Ignore device names with a single quote will not match with the device name coming in from SmartThings due to character code
+conversion.  This has been fixed.
+## New in version 1.5.1
+SmartThings Webhook support is now supported and open to all.  See the announcement [here](https://github.com/iklein99/homebridge-smartthings/discussions/141).
+## New in 1.5.0
+Support for SmartThings webhook to support real-time update of device state changes.  Support for webhooks is in closed beta at 
+the moment, but will be made available soon.  
+
 ## Fixed in 1.4.23
 * If a sensor service doesn't return a valid value, it will be removed from the device.
 * Fixed some state update management in the Thermostat service.
@@ -162,13 +203,22 @@ Garage Door Opener, Locks and Window Shades that support the WindowShadeLevel co
 You will need to create a Smartthings personal access token.  You can do that here: https://account.smartthings.com/tokens.  Create a
 new token and make sure it has all of the device permissions, and if you want to use the Ignore Locations feature, you must include the List Locations (r:locations) permission.  Save your token and add it to the configuration.
 <br>
+By configuring the WebhookToken, the plugin will attempt to connect to the SmartThings
+Webhook Server that we're running and wait for events.  This will result in 
+the plugin ignoring the poll settings as polling will not occur.
+<br>
 This section should be added to the platforms array in your config.json file, but you can now edit using the config UI:
 <pre>
         {
             "Name": "Smartthings Plugin",
             "AccessToken": "INSERT YOUR PERSONAL ACCESS TOKEN HERE",
+            "WebhookToken: "INSERT WEBHOOK TOKEN HERE",
             "BaseURL": "https://api.smartthings.com/v1",
             "GarageDoorMaxPoll": 40,
+            "PollLocksSeconds": 15,
+            "PollDoorsSeconds": 15,
+            "PollSensorsSeconds": 5,
+            "PollSwitchesAndLightsSeconds": 15
             "platform": "HomeBridgeSmartThings",
             "IgnoreLocations": [
                  "My location 1",

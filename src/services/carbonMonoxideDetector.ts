@@ -2,14 +2,16 @@ import { PlatformAccessory } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 import { SensorService } from './sensorService';
+import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class CarbonMonoxideDetectorService extends SensorService {
   serviceName = 'CarbonMonixideDetector';
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
+  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
+    multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
 
-    super(platform, accessory, multiServiceAccessory, name, deviceStatus);
+    super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.initService(platform.Service.CarbonMonoxideSensor,
       platform.Characteristic.CarbonMonoxideDetected,
@@ -25,5 +27,12 @@ export class CarbonMonoxideDetectorService extends SensorService {
       });
 
     this.log.debug(`Adding ${this.serviceName} Service to ${this.name}`);
+  }
+
+  public processEvent(event: ShortEvent): void {
+    this.log.debug(`Event updating CO detection for ${this.name} to ${event.value}`);
+    this.service.updateCharacteristic(this.platform.Characteristic.CarbonDioxideDetected,
+      (event.value === 'detected' ? this.platform.Characteristic.CarbonMonoxideDetected.CO_LEVELS_ABNORMAL :
+        this.platform.Characteristic.CarbonMonoxideDetected.CO_LEVELS_NORMAL) );
   }
 }

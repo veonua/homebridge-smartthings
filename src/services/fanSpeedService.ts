@@ -2,12 +2,14 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class FanSpeedService extends BaseService {
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
+  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
+    multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
-    super(platform, accessory, multiServiceAccessory, name, deviceStatus);
+    super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
     this.setServiceType(platform.Service.Fan);
 
     // Set the event handlers
@@ -95,7 +97,8 @@ export class FanSpeedService extends BaseService {
       this.multiServiceAccessory.sendCommand('fanSpeed', 'setFanSpeed', [level]).then(success => {
         if (success) {
           this.log.debug('setLevel(' + value + ') SUCCESSFUL for ' + this.name);
-          this.deviceStatus.timestamp = 0;
+          this.multiServiceAccessory.forceNextStatusRefresh();
+          // this.deviceStatus.timestamp = 0;
           resolve();
         } else {
           this.log.error(`Failed to send setLevel command for ${this.name}`);
@@ -122,16 +125,7 @@ export class FanSpeedService extends BaseService {
 
         if (this.deviceStatus.status.fanSpeed.fanSpeed.value !== undefined) {
           level = this.deviceStatus.status.fanSpeed.fanSpeed.value;
-          let pct;
-          if (level === 0) {
-            pct = 0;
-          } else if (level === 1) {
-            pct = 33;
-          } else if (level === 2) {
-            pct = 66;
-          } else {
-            pct = 100;
-          }
+          const pct = this.mapLevelToPercent(level);
           this.log.debug('getLevel() SUCCESSFUL for ' + this.name + '. value = ' + pct);
           resolve(pct);
 
@@ -141,5 +135,36 @@ export class FanSpeedService extends BaseService {
         }
       });
     });
+  }
+
+  public processEvent(event: ShortEvent): void {
+    switch (event.capability) {
+      case 'switch': {
+        this.log.debug(`Event updating switch capability for ${this.name} to ${event.value}`);
+        this.service.updateCharacteristic(this.platform.Characteristic.On, event.value === 'on');
+        return;
+      }
+
+      case 'fanSpeed': {
+        this.log.debug(`Event updating fanSpeed capability for ${this.name} to ${event.value}`);
+        this.service.updateCharacteristic(this.platform.Characteristic.RotationSpeed, this.mapLevelToPercent(event.value));
+      }
+    }
+
+  }
+
+  private mapLevelToPercent(level: number): number {
+    let pct;
+    if (level === 0) {
+      pct = 0;
+    } else if (level === 1) {
+      pct = 33;
+    } else if (level === 2) {
+      pct = 66;
+    } else {
+      pct = 100;
+    }
+
+    return pct;
   }
 }
