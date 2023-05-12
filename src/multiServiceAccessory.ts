@@ -33,6 +33,7 @@ import { ThermostatService } from './services/thermostatService';
  */
 export class MultiServiceAccessory extends BasePlatformAccessory {
   //  service: Service;
+  capabilities;
 
   /**
    * These are just used to create a working example
@@ -94,11 +95,15 @@ export class MultiServiceAccessory extends BasePlatformAccessory {
       service: SwitchService,
     },
     {
+      capabilities: ['thermostatMode',
+        'thermostatHeatingSetpoint'],
+      service: ThermostatService,
+    },
+    {
       capabilities: ['temperatureMeasurement',
         'thermostatMode',
-        'thermostatOperatingState',
-        'thermostatOperatingState',
-        'thermostatHeatingSetpoint'],
+        'thermostatHeatingSetpoint',
+        'thermostatCoolingSetpoint'],
       service: ThermostatService,
     },
   ];
@@ -109,6 +114,7 @@ export class MultiServiceAccessory extends BasePlatformAccessory {
     capabilities,
   ) {
     super(platform, accessory);
+    this.capabilities = capabilities;
 
     // Add services per capabilities
 

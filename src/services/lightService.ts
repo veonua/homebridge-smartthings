@@ -205,7 +205,7 @@ export class LightService extends BaseService {
 
         let stTemperature;
 
-        if (this.deviceStatus.status.colorTemperature.colorTemperature.value !== undefined) {
+        if (this.deviceStatus?.status?.colorTemperature?.colorTemperature?.value !== undefined) {
           stTemperature = Math.min(this.deviceStatus.status.colorTemperature.colorTemperature.value, 6500);
           this.log.debug('getColorTemperature() SUCCESSFUL for ' + this.name + '. value = ' + stTemperature);
           // Convert number to the homebridge compatible value

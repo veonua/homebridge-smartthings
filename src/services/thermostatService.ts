@@ -10,6 +10,10 @@ const stateMap =
 const stateMapRev = { 0: 'off', 1: 'heat', 2: 'cool', 3: 'auto'};
 
 export class ThermostatService extends BaseService {
+  targetHeatingCoolingState: any;
+  targetTemperature: any;
+  units = 'C';
+  supportsOperatingState = false;
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
@@ -18,6 +22,12 @@ export class ThermostatService extends BaseService {
     this.setServiceType(platform.Service.Thermostat);
     // Set the event handlers
     this.log.debug(`Adding ThermostatService to ${this.name}`);
+
+    if (this.multiServiceAccessory.capabilities.find((c) => c.id === 'thermostatOperatingState')) {
+      this.supportsOperatingState = true;
+    }
+    //this.service.getCharacteristic(platform.Characteristic.CurrentHeatingCoolingState)
+    //  .onGet(this.getCurrentHeatingCoolingState.bind(this));
     this.service.getCharacteristic(platform.Characteristic.TargetHeatingCoolingState)
       .onGet(this.getTargetHeatingCoolingState.bind(this))
       .onSet(this.setTargetHeatingCoolingState.bind(this));
@@ -72,7 +82,8 @@ export class ThermostatService extends BaseService {
     const targetState = stateMapRev[+value];
     this.multiServiceAccessory.sendCommand('thermostatMode', 'setThermostatMode', [targetState] ).then((success) => {
       if (success) {
-        this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
+        this.log.debug('setTargetHeatingCoolingState(' + value + ') SUCCESSFUL for ' + this.name);
+        //this.deviceStatus.timestamp = 0;  // Force a refresh next query.
       } else {
         this.log.error(`Command failed for ${this.name}`);
       }
@@ -83,7 +94,7 @@ export class ThermostatService extends BaseService {
   async getTargetHeatingCoolingState(): Promise<CharacteristicValue> {
     // if you need to return an error to show the device as "Not Responding" in the Home app:
     // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    this.log.debug('Received getSwitchState() event for ' + this.name);
+    this.log.debug('Received getTargetHeatingCoolingState() event for ' + this.name);
 
     return new Promise((resolve, reject) => {
       this.getStatus().then(success => {
@@ -177,31 +188,47 @@ export class ThermostatService extends BaseService {
     });
   }
 
-  async setTargetTemperature(value: CharacteristicValue): Promise<void> {
-    this.multiServiceAccessory.sendCommand('thermostatHeatingSetpoint', 'setHeatingSetpoint', [value] ).then((success) => {
-      if (success) {
-        this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-      } else {
-        this.log.error(`Command failed for ${this.name}`);
-      }
-    });
+  // TARGET TEMP
+  async getTargetTemperature():Promise<CharacteristicValue> {
+    this.log.debug('Received GetTargetTemperature for ' + this.name);
+    let temp;
+    if (await this.getTargetHeatingCoolingState() === this.platform.Characteristic.TargetHeatingCoolingState.COOL) {
+      temp = this.deviceStatus.status.thermostatCoolingSetpoint.coolingSetpoint.value;
+    } else {
+      temp = this.deviceStatus.status.thermostatHeatingSetpoint.heatingSetpoint.value;
+    }
+    if (temp === null || temp === undefined) {
+      throw(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.RESOURCE_DOES_NOT_EXIST));
+    }
+    if (this.units === 'F') {
+      temp = (temp - 32) * (5 / 9); // Convert to C
+    }
+    this.targetTemperature = temp;
+
+
+    const current = this.deviceStatus.status.temperatureMeasurement?.temperature?.value?? temp;
+    this.service.setCharacteristic(this.platform.Characteristic.CurrentTemperature, current);
+
+    return temp;
   }
 
-  async getTargetTemperature(): Promise<CharacteristicValue> {
-    return new Promise((resolve, reject) => {
-      if (!this.multiServiceAccessory.isOnline()) {
-        this.log.info(`${this.name} is offline`);
-        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      }
-      this.getStatus().then(success => {
-        if (!success) {
-          return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-        const value = this.deviceStatus.status.thermostatHeatingSetpoint.heatingSetpoint.value;
-        const current = this.deviceStatus.status.temperatureMeasurement?.temperature?.value?? value;
-        this.service.setCharacteristic(this.platform.Characteristic.CurrentTemperature, current);
-        resolve(value);
-      });
-    });
+  async setTargetTemperature(value: CharacteristicValue) {
+    this.log.debug('Received setTargetTemperature(' + value + ') event for ' + this.name);
+    this.targetTemperature = value as number;
+    let capability = '';
+    let command = '';
+
+    if (this.targetHeatingCoolingState === this.platform.Characteristic.TargetHeatingCoolingState.COOL) {
+      capability = 'thermostatCoolingSetpoint';
+      command = 'setCoolingSetpoint';
+    } else {
+      capability = 'thermostatHeatingSetpoint';
+      command = 'setHeatingSetpoint';
+    }
+
+    // If the thermostat's units is Farenheit, then we need to convert from celcius
+    const convertedTemp = this.units === 'F' ? (value as number * (9/5)) + 32 : value;
+
+    this.multiServiceAccessory.sendCommand(capability, command, [convertedTemp]);
   }
 }
