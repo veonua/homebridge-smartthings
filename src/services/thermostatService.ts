@@ -111,7 +111,7 @@ export class ThermostatService extends BaseService {
   async setTargetHeatingCoolingState(value: CharacteristicValue) {
     this.log.debug('Received setTargetHeatingCoolingState(' + value + ') event for ' + this.name);
 
-    if (!this.multiServiceAccessory.isOnline) {
+    if (!this.multiServiceAccessory.isOnline()) {
       this.log.error(this.name + ' is offline');
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
