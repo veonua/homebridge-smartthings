@@ -96,7 +96,7 @@ export class WindowCoveringService extends BaseService {
     return new Promise((resolve, reject) => {
       this.getStatus().then(success => {
         if (success) {
-          const state = this.deviceStatus.status.windowShade.windowShade;
+          const state = this.deviceStatus.status.windowShade.windowShade.value;
           if (state === 'opening') {
             this.currentPositionState = this.states.decreasing;
           } else if (state === 'closing') {
