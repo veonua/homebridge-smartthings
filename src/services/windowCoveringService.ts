@@ -6,6 +6,7 @@ import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class WindowCoveringService extends BaseService {
   private targetPosition = 0;
+  private currentPosition = 0;
   private timer;
   private states = {
     decreasing: this.platform.Characteristic.PositionState.DECREASING,
@@ -61,6 +62,15 @@ export class WindowCoveringService extends BaseService {
 
     this.targetPosition = value as number;
 
+    if (this.targetPosition > this.currentPosition) {
+      this.currentPositionState = this.states.increasing;
+    } else if (this.targetPosition < this.currentPosition) {
+      this.currentPositionState = this.states.decreasing;
+    } else {
+      this.currentPositionState = this.states.stopped;
+    }
+    this.service.updateCharacteristic(this.platform.Characteristic.PositionState, this.currentPositionState);
+
     if (!this.multiServiceAccessory.isOnline()) {
       this.log.error(this.name + ' is offline');
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
@@ -96,16 +106,21 @@ export class WindowCoveringService extends BaseService {
     return new Promise((resolve, reject) => {
       this.getStatus().then(success => {
         if (success) {
-          const state = this.deviceStatus.status.windowShade.windowShade;
-          if (state === 'opening') {
-            this.currentPositionState = this.states.decreasing;
-          } else if (state === 'closing') {
+          let position = 0;
+          if (this.useWindowShadeLevel) {
+            position = this.deviceStatus.status.windowShadeLevel.shadeLevel.value;
+          } else {
+            position = this.deviceStatus.status.switchLevel.level.value;
+          }
+          this.currentPosition = position;
+          if (this.targetPosition > position) {
             this.currentPositionState = this.states.increasing;
+          } else if (this.targetPosition < position) {
+            this.currentPositionState = this.states.decreasing;
           } else {
             this.currentPositionState = this.states.stopped;
           }
-          this.log.debug(`getCurrentPositionState() SUCCESSFUL for ${this.name} return value ${state}, ` +
-            `setting to ${this.currentPositionState}`);
+          this.log.debug(`getCurrentPositionState() SUCCESSFUL for ${this.name}, position ${position}, target ${this.targetPosition}, setting to ${this.currentPositionState}`);
           resolve(this.currentPositionState);
         } else {
           this.log.error('getCurrentPositionState() FAILED for ' + this.name);
@@ -149,6 +164,10 @@ export class WindowCoveringService extends BaseService {
           } else {
             position = this.deviceStatus.status.switchLevel.level.value;
           }
+          this.currentPosition = position;
+          if (Math.abs(this.targetPosition - position) <= 1) {
+            this.targetPosition = position;
+          }
           this.log.debug('onGet() SUCCESSFUL for ' + this.name + '. value = ' + position);
           resolve(position);
         } else {
@@ -162,13 +181,26 @@ export class WindowCoveringService extends BaseService {
   public processEvent(event: ShortEvent): void {
     if (event.capability === 'windowShadeLevel' || event.capability === 'switchLevel') {
       this.log.debug(`Event updating windowShadeLevel capability for ${this.name} to ${event.value}`);
-      this.service.updateCharacteristic(this.platform.Characteristic.CurrentPosition, event.value);
+      const value = Number(event.value);
+      if (!isNaN(value)) {
+        this.currentPosition = value;
+        if (Math.abs(this.targetPosition - value) <= 1) {
+          this.targetPosition = value;
+          this.currentPositionState = this.states.stopped;
+        } else if (this.targetPosition > value) {
+          this.currentPositionState = this.states.increasing;
+        } else {
+          this.currentPositionState = this.states.decreasing;
+        }
+        this.service.updateCharacteristic(this.platform.Characteristic.CurrentPosition, value);
+        this.service.updateCharacteristic(this.platform.Characteristic.PositionState, this.currentPositionState);
+      }
     } else if (event.capability === 'windowShade') {
       this.log.debug(`Event updating windowShade capability for ${this.name} to ${event.value}`);
       if (event.value === 'opening') {
-        this.currentPositionState = this.states.decreasing;
-      } else if (event.value === 'closing') {
         this.currentPositionState = this.states.increasing;
+      } else if (event.value === 'closing') {
+        this.currentPositionState = this.states.decreasing;
       } else {
         this.currentPositionState = this.states.stopped;
       }
