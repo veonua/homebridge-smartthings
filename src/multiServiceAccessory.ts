@@ -25,6 +25,7 @@ import { WindowCoveringService } from './services/windowCoveringService';
 import { ThermostatService } from './services/thermostatService';
 import { StatelessProgrammableSwitchService } from './services/statelessProgrammableSwitchService';
 import { AirConditionerService } from './services/airConditionerService';
+import { AirQualityService } from './services/airQualityService';
 import { Command } from './services/smartThingsCommand';
 // type DeviceStatus = {
 //   timestamp: number;
@@ -73,6 +74,8 @@ export class MultiServiceAccessory {
     'button': StatelessProgrammableSwitchService,
     'battery': BatteryService,
     'valve': ValveService,
+    'carbonDioxideMeasurement': AirQualityService,
+    'dustSensor': AirQualityService,
   };
 
   // Maps combinations of supported capabilities to a service
@@ -115,6 +118,10 @@ export class MultiServiceAccessory {
     {
       capabilities: ['switch', 'valve'],
       service: ValveService,
+    },
+    {
+      capabilities: ['carbonDioxideMeasurement', 'dustSensor'],
+      service: AirQualityService,
     },
     {
       capabilities: ['temperatureMeasurement',
