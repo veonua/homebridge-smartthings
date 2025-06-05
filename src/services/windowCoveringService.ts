@@ -35,7 +35,7 @@ export class WindowCoveringService extends BaseService {
 
     let pollWindowShadesSeconds = 10; // default to 10 seconds
     if (this.platform.config.PollWindowShadesSeconds !== undefined) {
-      pollWindowShadesSeconds = this.platform.config.PollSwitchesAndLightsSeconds;
+      pollWindowShadesSeconds = this.platform.config.PollWindowShadesSeconds;
     }
 
     if (pollWindowShadesSeconds > 0) {
@@ -98,9 +98,9 @@ export class WindowCoveringService extends BaseService {
         if (success) {
           const state = this.deviceStatus.status.windowShade.windowShade;
           if (state === 'opening') {
-            this.currentPositionState = this.states.decreasing;
-          } else if (state === 'closing') {
             this.currentPositionState = this.states.increasing;
+          } else if (state === 'closing') {
+            this.currentPositionState = this.states.decreasing;
           } else {
             this.currentPositionState = this.states.stopped;
           }
@@ -166,9 +166,9 @@ export class WindowCoveringService extends BaseService {
     } else if (event.capability === 'windowShade') {
       this.log.debug(`Event updating windowShade capability for ${this.name} to ${event.value}`);
       if (event.value === 'opening') {
-        this.currentPositionState = this.states.decreasing;
-      } else if (event.value === 'closing') {
         this.currentPositionState = this.states.increasing;
+      } else if (event.value === 'closing') {
+        this.currentPositionState = this.states.decreasing;
       } else {
         this.currentPositionState = this.states.stopped;
       }
