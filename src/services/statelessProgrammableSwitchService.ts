@@ -55,9 +55,9 @@ export class StatelessProgrammableSwitchService extends BaseService {
     return new Promise((resolve, reject) => {
       this.getStatus().then(success => {
         if (success) {
-          const buttonState = this.deviceStatus.status.button.button.value as string | undefined;
-          if (buttonState === undefined) {
-            this.log.debug(`Button state is undefined for ${this.name}`);
+          const buttonState = this.deviceStatus.status.button.button.value as string | null;
+          if (buttonState === null) {
+            this.log.debug(`No button for ${this.name}`);
             resolve;
             return;
           }

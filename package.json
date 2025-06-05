@@ -1,20 +1,20 @@
 {
   "private": false,
   "displayName": "SmartThings Plugin",
-  "name": "homebridge-smartthings-ik",
-  "version": "1.5.22",
+  "name": "homebridge-smartthings-veon",
+  "version": "1.6.1",
   "description": "Connects SmartThings devices to Homebridge.  Automatically discovers devices.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/iklein99/homebridge-smartthings.git"
+    "url": "https://github.com/veon/homebridge-smartthings.git"
   },
   "bugs": {
-    "url": "https://github.com/iklein99/homebridge-smartthings/issues"
+    "url": "https://github.com/veon/homebridge-smartthings/issues"
   },
   "engines": {
     "node": ">=18.0.0",
-    "homebridge": ">=1.3.5"
+    "homebridge": ">=2.0.0"
   },
   "main": "dist/index.js",
   "scripts": {
