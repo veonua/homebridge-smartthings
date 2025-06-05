@@ -55,19 +55,20 @@ export class StatelessProgrammableSwitchService extends BaseService {
     return new Promise((resolve, reject) => {
       this.getStatus().then(success => {
         if (success) {
-          let buttonState: string;
-          try {
-            buttonState = this.deviceStatus.status.button.button.value as string;
-            this.log.debug(`Button value from ${this.name}: ${buttonState}`);
-            const characteristicValue = this.mapValue(buttonState);
-            if (characteristicValue) {
-              resolve(characteristicValue);
-            } else {
-              resolve;
-            }
-          } catch(error) {
-            this.log.error(`Missing button status from ${this.name}`);
+          const buttonState = this.deviceStatus.status.button.button.value as string | undefined;
+          if (buttonState === undefined) {
+            this.log.debug(`Button state is undefined for ${this.name}`);
+            resolve;
+            return;
           }
+          this.log.debug(`Button value from ${this.name}: ${buttonState}`);
+          const characteristicValue = this.mapValue(buttonState);
+          if (characteristicValue) {
+            resolve(characteristicValue);
+          } else {
+            resolve;
+          }
+          
         } else {
           reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
         }
