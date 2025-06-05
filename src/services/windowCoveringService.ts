@@ -97,6 +97,7 @@ export class WindowCoveringService extends BaseService {
       this.getStatus().then(success => {
         if (success) {
           const state = this.deviceStatus.status.windowShade.windowShade;
+          this.log.info(`${this.name} raw shade state ${state}`);
           if (state === 'opening') {
             this.currentPositionState = this.states.increasing;
           } else if (state === 'closing') {
@@ -104,6 +105,7 @@ export class WindowCoveringService extends BaseService {
           } else {
             this.currentPositionState = this.states.stopped;
           }
+          this.log.info(`${this.name} mapped state ${this.currentPositionState}`);
           this.log.debug(`getCurrentPositionState() SUCCESSFUL for ${this.name} return value ${state}, ` +
             `setting to ${this.currentPositionState}`);
           resolve(this.currentPositionState);
@@ -149,6 +151,7 @@ export class WindowCoveringService extends BaseService {
           } else {
             position = this.deviceStatus.status.switchLevel.level.value;
           }
+          this.log.info(`${this.name} reported position ${position}`);
           this.log.debug('onGet() SUCCESSFUL for ' + this.name + '. value = ' + position);
           resolve(position);
         } else {
@@ -164,6 +167,7 @@ export class WindowCoveringService extends BaseService {
       this.log.debug(`Event updating windowShadeLevel capability for ${this.name} to ${event.value}`);
       this.service.updateCharacteristic(this.platform.Characteristic.CurrentPosition, event.value);
     } else if (event.capability === 'windowShade') {
+      this.log.info(`${this.name} received windowShade event ${event.value}`);
       this.log.debug(`Event updating windowShade capability for ${this.name} to ${event.value}`);
       if (event.value === 'opening') {
         this.currentPositionState = this.states.increasing;
@@ -172,6 +176,7 @@ export class WindowCoveringService extends BaseService {
       } else {
         this.currentPositionState = this.states.stopped;
       }
+      this.log.info(`${this.name} event mapped state ${this.currentPositionState}`);
       this.log.debug(`From event, setting characteristic to ${this.currentPositionState}`);
       this.service.updateCharacteristic(this.platform.Characteristic.PositionState, this.currentPositionState);
     }
