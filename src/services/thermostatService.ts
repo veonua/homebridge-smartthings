@@ -206,7 +206,7 @@ export class ThermostatService extends BaseService {
           if (this.deviceStatus.status.temperatureMeasurement.temperature.value === null ||
             this.deviceStatus.status.temperatureMeasurement.temperature.value === undefined ||
             this.deviceStatus.status.temperatureMeasurement.temperature.unit === null ||
-            this.deviceStatus.status.temperatureMeasurement.temperature.value === undefined) {
+            this.deviceStatus.status.temperatureMeasurement.temperature.unit === undefined) {
             this.log.warn(`${this.name} returned bad value for status`);
             throw ('Bad Value');
           }
