@@ -73,7 +73,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
 
         // Start local webhook server if configured
         if (config.LocalWebhookPort && config.LocalWebhookPort > 0) {
-          this.localWebhook = new LocalWebhookServer(this.log, this.accessoryObjects, config.LocalWebhookPort);
+          this.localWebhook = new LocalWebhookServer(this.log, config, this.accessoryObjects, config.LocalWebhookPort);
           this.localWebhook.start();
         }
 
