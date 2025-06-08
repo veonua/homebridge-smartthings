@@ -6,7 +6,11 @@ import { ShortEvent } from './subscriptionHandler';
 
 export class LocalWebhookServer {
   private app = express();
-  private smartapp = new SmartApp().enableEventLogging(2)
+  private smartapp = new SmartApp()
+    .enableEventLogging(2)
+    .clientId('8a4b3887-fa4e-4994-a067-7fcec1bfa61e')
+    .clientSecret('bd932369-b1b5-4431-a739-3cfc26f6cb1c')
+    .permissions(['r:devices:*', 'r:locations:*', 'r:scenes:*'])
     .subscribedEventHandler('deviceEvent', async (context, event) => {
       const shortEvent: ShortEvent = {
         deviceId: event.deviceId,
