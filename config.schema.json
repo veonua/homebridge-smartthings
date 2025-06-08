@@ -29,6 +29,12 @@
         "required": false,
         "default": ""
       },
+      "LocalWebhookPort": {
+        "title": "Local Webhook Port",
+        "type": "integer",
+        "required": false,
+        "default": 0
+      },
 
       "GarageDoorMaxPoll": {
         "title": "Garage Door Max Poll",

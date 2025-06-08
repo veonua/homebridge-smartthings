@@ -5,6 +5,7 @@ import axios = require('axios');
 //import { BasePlatformAccessory } from './basePlatformAccessory';
 import { MultiServiceAccessory } from './multiServiceAccessory';
 import { SubscriptionHandler } from './webhook/subscriptionHandler';
+import { LocalWebhookServer } from './webhook/localWebhookServer';
 
 /**
  * HomebridgePlatform
@@ -32,6 +33,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
 
   private accessoryObjects: MultiServiceAccessory[] = [];
   private subscriptionHandler: SubscriptionHandler | undefined = undefined;
+  private localWebhook: LocalWebhookServer | undefined = undefined;
 
   constructor(
     public readonly log: Logger,
@@ -67,6 +69,12 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
         if (config.WebhookToken && config.WebhookToken !== '') {
           this.subscriptionHandler = new SubscriptionHandler(this, this.accessoryObjects);
           this.subscriptionHandler.startService();
+        }
+
+        // Start local webhook server if configured
+        if (config.LocalWebhookPort && config.LocalWebhookPort > 0) {
+          this.localWebhook = new LocalWebhookServer(this.log, this.accessoryObjects, config.LocalWebhookPort);
+          this.localWebhook.start();
         }
 
       }).catch(reason => {

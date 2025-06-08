@@ -22,13 +22,14 @@
     "watch": "npm run build && npm link && nodemon",
     "pack": "rimraf ./dist && tsc && npm pack",
     "prepublishOnly": "npm run lint && npm run build",
-    "build": "rimraf ./dist && tsc",
+    "build": "rimraf ./dist && tsc"
   },
   "keywords": [
     "homebridge-plugin"
   ],
   "dependencies": {
-    "homebridge-config-ui-x": "^4.75.0"
+    "homebridge-config-ui-x": "^4.75.0",
+    "express": "^4.19.2"
   },
   "devDependencies": {
     "@types/express": "^5.0.2",
