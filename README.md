@@ -272,7 +272,7 @@ This allows you to host your own webhook server that implements the same `/clien
 
 ### Hosting a local webhook endpoint
 
-If you want the plugin itself to receive webhook events, set `LocalWebhookPort` in your configuration. When this value is greater than zero the plugin starts an HTTP server on that port and listens for `POST /event` requests containing a JSON body with an `events` array. Each event uses the same structure as the remote webhook service.
+If you want the plugin itself to receive webhook events, set `LocalWebhookPort` in your configuration. When this value is greater than zero the plugin starts an HTTP server using the `@smartthings/smartapp` library. SmartThings should be configured to send lifecycle callbacks to the root path (`POST /`). For testing you can also send `POST /event` requests with a JSON body containing an `events` array. Each item uses the same structure as the remote webhook service.
 
 Example `config.json` snippet:
 

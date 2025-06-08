@@ -28,8 +28,9 @@
     "homebridge-plugin"
   ],
   "dependencies": {
-    "homebridge-config-ui-x": "^4.75.0",
-    "express": "^4.19.2"
+    "@smartthings/smartapp": "^4.3.5",
+    "express": "^4.19.2",
+    "homebridge-config-ui-x": "^4.75.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.2",
