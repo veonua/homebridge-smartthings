@@ -232,14 +232,19 @@ export class ThermostatService extends BaseService {
   async getTargetTemperature():Promise<CharacteristicValue> {
     this.log.debug('Received GetTargetTemperature for ' + this.name);
     let temp;
-    if (await this.getTargetHeatingCoolingState() === this.platform.Characteristic.TargetHeatingCoolingState.COOL) {
-      temp = this.deviceStatus.status.thermostatCoolingSetpoint.coolingSetpoint.value;
+    const state = await this.getTargetHeatingCoolingState();
+
+    if (state === this.platform.Characteristic.TargetHeatingCoolingState.COOL) {
+      temp = this.deviceStatus.status.thermostatCoolingSetpoint?.coolingSetpoint?.value;
     } else {
-      temp = this.deviceStatus.status.thermostatHeatingSetpoint.heatingSetpoint.value;
+      temp = this.deviceStatus.status.thermostatHeatingSetpoint?.heatingSetpoint?.value;
     }
+
     if (temp === null || temp === undefined) {
-      throw(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.RESOURCE_DOES_NOT_EXIST));
+      this.log.warn(`Target temperature not available for ${this.name}`);
+      return this.targetTemperature ?? 0;
     }
+
     if (this.units === 'F') {
       temp = (temp - 32) * (5 / 9); // Convert to C
     }
