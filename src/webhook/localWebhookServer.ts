@@ -16,7 +16,37 @@ export class LocalWebhookServer {
     .clientSecret(config.SmartAppClientSecret || "bd932369-b1b5-4431-a739-3cfc26f6cb1c")
     .appId("a1fd6bcf-1d50-4e33-883a-4274db0d3fba").permissions(['r:devices:*', 'x:devices:*', 'r:locations:*', 'r:scenes:*'])
     .disableCustomDisplayName(true)
-    .subscribedEventHandler('devices', async (context, event) => {
+    .subscribedEventHandler('switches', async (context, event) => {
+      this.log.info(`Received event: ${JSON.stringify(event)}`);
+      const shortEvent: ShortEvent = {
+        deviceId: event.deviceId,
+        componentId: event.componentId,
+        capability: event.capability,
+        attribute: event.attribute,
+        value: event.value,
+      };
+
+      const device = this.devices.find(d => d.id === shortEvent.deviceId);
+      if (device) {
+        device.processEvent(shortEvent);
+      }
+    })
+    .subscribedEventHandler('contactSensors', async (context, event) => {
+      this.log.info(`Received event: ${JSON.stringify(event)}`);
+      const shortEvent: ShortEvent = {
+        deviceId: event.deviceId,
+        componentId: event.componentId,
+        capability: event.capability,
+        attribute: event.attribute,
+        value: event.value,
+      };
+
+      const device = this.devices.find(d => d.id === shortEvent.deviceId);
+      if (device) {
+        device.processEvent(shortEvent);
+      }
+    })
+    .subscribedEventHandler('windowShadeLevels', async (context, event) => {
       this.log.info(`Received event: ${JSON.stringify(event)}`);
       const shortEvent: ShortEvent = {
         deviceId: event.deviceId,
@@ -65,22 +95,22 @@ export class LocalWebhookServer {
     })
     .updated(async (context) => {
       await context.api.subscriptions.delete()
-      await context.api.subscriptions.subscribeToCapability("switch", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("switchLevel", "*", "devices")
+      await context.api.subscriptions.subscribeToCapability("switch", "*", "switches")
+      //await context.api.subscriptions.subscribeToCapability("switchLevel", "*", "devices")
 
-      await context.api.subscriptions.subscribeToCapability("lock", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("contactSensor", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("motionSensor", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("temperatureMeasurement", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("illuminanceMeasurement", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("powerMeter", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("energyMeter", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("switchLevel", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("thermostatCoolingSetpoint", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("thermostatHeatingSetpoint", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("thermostatMode", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("windowShade", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("windowShadeLevel", "*", "devices")
+      //await context.api.subscriptions.subscribeToCapability("lock", "*", "devices")
+      await context.api.subscriptions.subscribeToCapability("contactSensor", "*", "contactSensors")
+      // await context.api.subscriptions.subscribeToCapability("motionSensor", "*", "motionSensors")
+      // await context.api.subscriptions.subscribeToCapability("temperatureMeasurement", "*", "temperatureMeasurements")
+      // await context.api.subscriptions.subscribeToCapability("illuminanceMeasurement", "*", "illuminanceMeasurements")
+      // await context.api.subscriptions.subscribeToCapability("powerMeter", "*", "powerMeters")
+      // await context.api.subscriptions.subscribeToCapability("energyMeter", "*", "energyMeters")
+      // await context.api.subscriptions.subscribeToCapability("switchLevel", "*", "switchLevels")
+      // await context.api.subscriptions.subscribeToCapability("thermostatCoolingSetpoint", "*", "thermostatCoolingSetpoints")
+      // await context.api.subscriptions.subscribeToCapability("thermostatHeatingSetpoint", "*", "thermostatHeatingSetpoints")
+      // await context.api.subscriptions.subscribeToCapability("thermostatMode", "*", "thermostatModes")
+      // await context.api.subscriptions.subscribeToCapability("windowShade", "*", "windowShades")
+      await context.api.subscriptions.subscribeToCapability("windowShadeLevel", "*", "windowShadeLevels")
 
     });
 
