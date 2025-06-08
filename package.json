@@ -2,7 +2,7 @@
   "private": false,
   "displayName": "SmartThings Plugin",
   "name": "homebridge-smartthings-veon",
-  "version": "25.6.8",
+  "version": "25.6.84",
   "description": "Connects SmartThings devices to Homebridge.  Automatically discovers devices.",
   "license": "Apache-2.0",
   "repository": {
@@ -20,8 +20,9 @@
   "scripts": {
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint src/**.ts --max-warnings=0",
     "watch": "npm run build && npm link && nodemon",
+    "pack": "rimraf ./dist && tsc && npm pack",
+    "prepublishOnly": "npm run lint && npm run build",
     "build": "rimraf ./dist && tsc",
-    "prepublishOnly": "npm run lint && npm run build"
   },
   "keywords": [
     "homebridge-plugin"

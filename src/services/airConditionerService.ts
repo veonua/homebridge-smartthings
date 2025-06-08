@@ -63,7 +63,7 @@ export class AirConditionerService extends BaseService {
     name: string, deviceStatus) {
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
-    this.log.debug(`Adding AirConditionerService to ${this.name}`);
+    this.log.info(`Adding AirConditionerService to ${this.name}`);
 
     if (!this.isCapabilitySupported('airConditionerMode') && this.isCapabilitySupported('thermostatMode')) {
       this.modeCapability = 'thermostatMode';
@@ -102,7 +102,7 @@ export class AirConditionerService extends BaseService {
   }
 
   private setupThermostat(platform: IKHomeBridgeHomebridgePlatform, multiServiceAccessory: MultiServiceAccessory): Service {
-    this.log.debug(`Expose Thermostat for ${this.name}`);
+    this.log.info(`Expose Thermostat for ${this.name}`);
 
     // add thermostat service
     this.setServiceType(platform.Service.Thermostat);
@@ -137,7 +137,7 @@ export class AirConditionerService extends BaseService {
   }
 
   private setupFan(platform: IKHomeBridgeHomebridgePlatform, multiServiceAccessory: MultiServiceAccessory): Service {
-    this.log.debug(`Expose Fan for ${this.name}`);
+    this.log.info(`Expose Fan for ${this.name}`);
 
     this.setServiceType(platform.Service.Fanv2);
 
@@ -190,7 +190,7 @@ export class AirConditionerService extends BaseService {
   }
 
   private setupLightSwitch(platform: IKHomeBridgeHomebridgePlatform, multiServiceAccessory: MultiServiceAccessory): Service {
-    this.log.debug(`Expose Light Switch for ${this.name}`);
+    this.log.info(`Expose Light Switch for ${this.name}`);
 
     this.setServiceType(platform.Service.Lightbulb); // Use Lightbulb service to control light intensity
 
@@ -249,6 +249,7 @@ export class AirConditionerService extends BaseService {
   }
 
   private fanOscillationModeToSwingMode(fanOscillationMode: FanOscillationMode): CharacteristicValue {
+    this.log.info(`[${this.name}] fanOscillationModeToSwingMode: ${fanOscillationMode}`);
     switch (fanOscillationMode) {
       case FanOscillationMode.All:
       case FanOscillationMode.Vertical:
@@ -335,7 +336,7 @@ export class AirConditionerService extends BaseService {
   }
 
   private async getFanLevel(): Promise<CharacteristicValue> {
-    this.log.debug(`[${this.name}] get fan level`);
+    this.log.info(`[${this.name}] get fan level`);
     const deviceStatus = await this.getDeviceStatus();
     if (!deviceStatus.airConditionerFanMode.fanMode.value) {
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.RESOURCE_DOES_NOT_EXIST);
@@ -347,6 +348,7 @@ export class AirConditionerService extends BaseService {
 
 
   private setSwingMode(value: CharacteristicValue): Promise<void> {
+    this.log.info(`[${this.name}] set fan swing mode to ${value}`);
     const mode = value === this.platform.Characteristic.SwingMode.SWING_ENABLED ? FanOscillationMode.All : FanOscillationMode.Fixed;
     this.log.info(`[${this.name}] set fan swing mode to ${mode}`);
     const command = new Command('fanOscillationMode', 'setFanOscillationMode', [mode]);
@@ -355,7 +357,7 @@ export class AirConditionerService extends BaseService {
 
 
   private async getSwingMode(): Promise<CharacteristicValue> {
-    this.log.debug(`[${this.name}] get fan swing mode`);
+    this.log.info(`[${this.name}] get fan swing mode`);
     const deviceStatus = await this.getDeviceStatus();
     const swingMode = deviceStatus.fanOscillationMode.fanOscillationMode.value as FanOscillationMode;
     return this.fanOscillationModeToSwingMode(swingMode);
@@ -392,7 +394,7 @@ export class AirConditionerService extends BaseService {
   }
 
   private async getTargetHeatingCoolingState(): Promise<CharacteristicValue> {
-    this.log.debug(`[${this.name}] get target heating cooling state`);
+    this.log.info(`[${this.name}] get target heating cooling state`);
     const deviceStatus = await this.getDeviceStatus();
 
     const isOff = deviceStatus.switch.switch.value === 'off';
@@ -427,7 +429,7 @@ export class AirConditionerService extends BaseService {
 
 
   private async getCurrentHeatingCoolingState(): Promise<CharacteristicValue> {
-    this.log.debug(`[${this.name}] get current heating cooling state`);
+    this.log.info(`[${this.name}] get current heating cooling state`);
     const deviceStatus = await this.getDeviceStatus();
     const CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState;
     const mode = this.getModeFromStatus(deviceStatus);
@@ -452,7 +454,7 @@ export class AirConditionerService extends BaseService {
   }
 
   private async getCurrentTemperature(): Promise<CharacteristicValue> {
-    this.log.debug(`[${this.name}] get current temperature`);
+    this.log.info(`[${this.name}] get current temperature`);
 
     const deviceStatus = await this.getDeviceStatus();
 
@@ -470,7 +472,7 @@ export class AirConditionerService extends BaseService {
 
 
   private async getTargetTemperature(): Promise<CharacteristicValue> {
-    this.log.debug(`[${this.name}] get target temperature`);
+    this.log.info(`[${this.name}] get target temperature`);
     const deviceStatus = await this.getDeviceStatus();
     const coolingSetpoint = deviceStatus.thermostatCoolingSetpoint.coolingSetpoint.value;
 
@@ -490,7 +492,7 @@ export class AirConditionerService extends BaseService {
   }
 
   private getTemperatureDisplayUnits(): CharacteristicValue {
-    this.log.debug(`[${this.name}] get temperatured dislay units`);
+    this.log.info(`[${this.name}] get temperatured dislay units`);
     return this.temperatureUnit === TemperatureUnit.Celsius
       ? this.platform.Characteristic.TemperatureDisplayUnits.CELSIUS
       : this.platform.Characteristic.TemperatureDisplayUnits.FAHRENHEIT;
@@ -556,6 +558,7 @@ export class AirConditionerService extends BaseService {
         this.fanService.updateCharacteristic(this.platform.Characteristic.RotationSpeed, this.fanModeToLevel(event.value));
         break;
       case 'fanOscillationMode':
+        this.log.info(`[${this.name}] fanOscillationMode event: ${event.value}`);
         fanOscillationMode = event.value as FanOscillationMode;
         this.fanService.updateCharacteristic(this.platform.Characteristic.SwingMode,
           this.fanOscillationModeToSwingMode(fanOscillationMode));
