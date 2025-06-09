@@ -10,18 +10,36 @@ export class LocalWebhookServer {
   private app = express();
   
   private capabilitiesToSubscribe = [
+    
+    'button',
     'switch',
     'switchLevel',
+    'colorTemperature',
     'lock',
+    'doorControl',
     'contactSensor',
     'motionSensor',
+    'presenceSensor',
+
     'temperatureMeasurement',
-    'illuminanceMeasurement',
-    'thermostatCoolingSetpoint',
-    'thermostatHeatingSetpoint',
     'thermostatMode',
+    'thermostatHeatingSetpoint',
+    'thermostatCoolingSetpoint',
+    'fanSpeed',
+    'fanOscillationMode',
+    'airConditionerMode',
+    'airConditionerFanMode',
+
+    'waterSensor',
+    'smokeDetector',
+    'carbonMonoxideDetector',
+    
     'windowShade',
     'windowShadeLevel'
+    // frequent changes, not needed for now
+    //'illuminanceMeasurement',
+    //'carbonDioxideMeasurement'
+    
   ];
 
   private async processDeviceEvent(context: SmartAppContext,
@@ -73,7 +91,7 @@ export class LocalWebhookServer {
     }
     
     const smartapp = new SmartApp()
-    .enableEventLogging(2)
+    //.enableEventLogging(2)
     .clientId(config.SmartAppClientId).clientSecret(config.SmartAppClientSecret)
     .appId(config.SmartAppId).permissions(['r:devices:*', 'x:devices:*', 'r:locations:*', 'r:scenes:*'])
     .disableCustomDisplayName(true)
