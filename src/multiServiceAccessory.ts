@@ -474,6 +474,8 @@ export class MultiServiceAccessory {
     if (service) {
       this.log.debug(`Event for ${this.name}:${event.componentId} - ${event.value}`);
       service.processEvent(event);
+    } else {
+      this.log.warn(`No service found for ${this.name}:${event.componentId} - ${event.value}`);
     }
 
   }
