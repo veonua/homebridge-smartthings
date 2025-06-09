@@ -260,3 +260,31 @@ The "IgnoreLocations" array may be omitted.  This array can be used to specify l
 
 You need to restart Homebridge when you make changes to this file.
 
+### Using a custom webhook server
+
+By default the plugin sends webhook requests to `https://stwh.kleinstudios.net/api/`. You can direct these requests to your own server by setting the `WEBHOOK_URL` environment variable before starting Homebridge.
+
+```
+WEBHOOK_URL=https://myserver.example.com/api/ homebridge
+```
+
+This allows you to host your own webhook server that implements the same `/clientrequest` API.
+
+### Hosting a local webhook endpoint
+
+If you want the plugin itself to receive webhook events, set `LocalWebhookPort` in your configuration. When this value is greater than zero the plugin starts an HTTP server using the `@smartthings/smartapp` library. SmartThings should be configured to send lifecycle callbacks to the root path (`POST /`). For testing you can also send `POST /event` requests with a JSON body containing an `events` array. Each item uses the same structure as the remote webhook service.
+
+Example `config.json` snippet:
+
+```
+    "LocalWebhookPort": 8080
+```
+
+You can then send requests from Postman or another tool:
+
+```
+curl -X POST http://localhost:8080/event \
+  -H 'Content-Type: application/json' \
+  -d '{"events":[{"deviceId":"<id>","componentId":"main","capability":"switch","attribute":"switch","value":"on"}]}'
+```
+
