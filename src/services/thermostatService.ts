@@ -201,6 +201,12 @@ export class ThermostatService extends BaseService {
   async getCurrentTemperature(): Promise<CharacteristicValue> {
     this.log.debug('Received getCurrentTemperature for ' + this.name);
     return new Promise((resolve) => {
+      if (this.capabilities.find((c) => c === 'temperatureMeasurement') === undefined) {
+        this.log.debug(`No temperatureMeasurement capability for ${this.name}, returning target temperature`);
+        resolve(this.targetTemperature);
+        return;
+      }
+
       this.getStatus().then((success) => {
         if (success) {
           if (this.deviceStatus.status.temperatureMeasurement.temperature.value === null ||
@@ -219,7 +225,6 @@ export class ThermostatService extends BaseService {
             resolve(this.deviceStatus.status.temperatureMeasurement.temperature.value);
           }
         } else {
-          // reject (new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
           // For some reason, when homekit makes this call and it fails, Homebridge crashes.  So we will simply return zero.
           this.log.warn(`Failed to get status for ${this.name}`);
           resolve(0);
