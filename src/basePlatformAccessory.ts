@@ -147,7 +147,7 @@ export abstract class BasePlatformAccessory {
     getTargetState?: () => Promise<CharacteristicValue>): NodeJS.Timeout | void {
 
     if (this.platform.config.SmartClientId && this.platform.config.SmartClientId !== '') {
-      this.log.debug(`Not polling because SmartApp is set.`);
+      this.log.debug('Not polling because SmartApp is set.');
       return;  // Don't poll if we have a Smart App
     }
 
