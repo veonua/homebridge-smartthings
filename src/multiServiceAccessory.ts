@@ -134,6 +134,23 @@ export class MultiServiceAccessory {
       service: ThermostatService,
     },
     {
+      capabilities: ['thermostatMode',
+        'thermostatHeatingSetpoint',
+        'thermostatCoolingSetpoint'],
+      service: ThermostatService,
+    },
+    {
+      // Heater without current temperature reporting
+      capabilities: ['thermostatMode',
+        'thermostatHeatingSetpoint'],
+      service: ThermostatService,
+    },
+    {
+      // Device only exposes a heating setpoint
+      capabilities: ['thermostatHeatingSetpoint'],
+      service: ThermostatService,
+    },
+    {
       capabilities: ['windowShade', 'windowShadeLevel'],
       service: WindowCoveringService,
     },
