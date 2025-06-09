@@ -3,11 +3,10 @@ import axios = require('axios');
 import { IKHomeBridgeHomebridgePlatform } from './platform';
 import { ShortEvent } from './webhook/subscriptionHandler';
 
-type DeviceStatus = {
+interface DeviceStatus {
   timestamp: number;
-  //status: Record<string, unknown>;
-  status: any;
-};
+  status?: Record<string, unknown>;
+}
 /**
  * Platform Accessory
  * An instance of this class is created for each accessory your platform registers
@@ -97,49 +96,50 @@ export abstract class BasePlatformAccessory {
   // 4 seconds since last refresh
   //
   protected async refreshStatus(): Promise<boolean> {
-    return new Promise((resolve) => {
-      this.log.debug(`Refreshing status for ${this.name} - current timestamp is ${this.deviceStatus.timestamp}`);
-      if ((this.deviceStatus.status === undefined) || (Date.now() - this.deviceStatus.timestamp > 5000)) {
-        // If there is already a call to smartthings to update status for this device, don't issue another one until
-        // we return from that.
-        if (this.statusQueryInProgress){
-          this.log.debug(`Status query already in progress for ${this.name}.  Waiting...`);
-          this.waitFor(() => !this.statusQueryInProgress).then(() => resolve(this.lastStatusResult));
-          return;
-        }
-        this.log.debug(`Calling Smartthings to get an update for ${this.name}`);
-        this.statusQueryInProgress = true;
-        this.failureCount = 0;
-        this.waitFor(() => this.commandInProgress === false).then(() => {
-          this.lastStatusResult = true;
-          this.axInstance.get(this.statusURL).then((res) => {
-            if (res.data.components.main !== undefined) {
-              this.deviceStatus.status = res.data.components.main;
-              this.deviceStatus.timestamp = Date.now();
-              this.log.debug(`Updated status for ${this.name}: ${JSON.stringify(this.deviceStatus.status)}`);
-              this.statusQueryInProgress = false;
-              resolve(true);
-            } else {
-              this.log.debug(`No status returned for ${this.name}`);
-              this.statusQueryInProgress = false;
-              resolve(this.lastStatusResult = false);
-            }
-          }).catch(error => {
-            this.failureCount++;
-            this.log.error(`Failed to request status from ${this.name}: ${error}.  This is failure number ${this.failureCount}`);
-            if (this.failureCount >= 5) {
-              this.log.error(`Exceeded allowed failures for ${this.name}.  Device is offline`);
-              this.giveUpTime = Date.now();
-              this.online = false;
-            }
-            this.statusQueryInProgress = false;
-            resolve(this.lastStatusResult = false);
-          });
-        });
-      } else {
-        resolve(true);
+    this.log.debug(`Refreshing status for ${this.name} - current timestamp is ${this.deviceStatus.timestamp}`);
+
+    const tooOld = this.deviceStatus.status === undefined || (Date.now() - this.deviceStatus.timestamp > 5000);
+    if (!tooOld) {
+      return true;
+    }
+
+    if (this.statusQueryInProgress) {
+      this.log.debug(`Status query already in progress for ${this.name}.  Waiting...`);
+      await this.waitFor(() => !this.statusQueryInProgress);
+      return this.lastStatusResult;
+    }
+
+    this.log.debug(`Calling Smartthings to get an update for ${this.name}`);
+    this.statusQueryInProgress = true;
+    this.failureCount = 0;
+    await this.waitFor(() => !this.commandInProgress);
+
+    try {
+      const res = await this.axInstance.get(this.statusURL);
+      if (res.data.components.main === undefined) {
+        this.log.debug(`No status returned for ${this.name}`);
+        this.lastStatusResult = false;
+        return false;
       }
-    });
+
+      this.deviceStatus.status = res.data.components.main;
+      this.deviceStatus.timestamp = Date.now();
+      this.log.debug(`Updated status for ${this.name}: ${JSON.stringify(this.deviceStatus.status)}`);
+      this.lastStatusResult = true;
+      return true;
+    } catch (error) {
+      this.failureCount++;
+      this.log.error(`Failed to request status from ${this.name}: ${error}.  This is failure number ${this.failureCount}`);
+      if (this.failureCount >= 5) {
+        this.log.error(`Exceeded allowed failures for ${this.name}.  Device is offline`);
+        this.giveUpTime = Date.now();
+        this.online = false;
+      }
+      this.lastStatusResult = false;
+      return false;
+    } finally {
+      this.statusQueryInProgress = false;
+    }
   }
 
   protected startPollingState(pollSeconds: number, getValue: () => Promise<CharacteristicValue>, service: Service,
@@ -197,43 +197,27 @@ export abstract class BasePlatformAccessory {
 
   async sendCommand(capability: string, command: string, args?: unknown[]): Promise<boolean> {
 
-    let cmd: unknown;
-
-    if (args) {
-      cmd = {
-        capability: capability,
-        command: command,
-        arguments: args,
-      };
-    } else {
-      cmd = {
-        capability: capability,
-        command: command,
-      };
-    }
+    const cmd = {
+      capability,
+      command,
+      ...(args ? { arguments: args } : {}),
+    };
 
     const commandBody = JSON.stringify([cmd]);
-    return new Promise((resolve) => {
-      this.waitFor(() => !this.commandInProgress).then(() => {
-        this.commandInProgress = true;
-        this.axInstance.post(this.commandURL, commandBody).then(() => {
-          this.log.debug(`${command} successful for ${this.name}`);
-          this.deviceStatus.timestamp = 0; // Force a refresh on next poll after a state change
-          this.commandInProgress = false;
-          resolve(true);
-          // Force a small delay so that status fetch is correct
-          // setTimeout(() => {
-          //   this.log.debug(`Delay complete for ${this.name}`);
-          //   this.commandInProgress = false;
-          //   resolve(true);
-          // }, 1500);
-        }).catch((error) => {
-          this.commandInProgress = false;
-          this.log.error(`${command} failed for ${this.name}: ${error}`);
-          resolve(false);
-        });
-      });
-    });
+    await this.waitFor(() => !this.commandInProgress);
+    this.commandInProgress = true;
+    try {
+      await this.axInstance.post(this.commandURL, commandBody);
+      this.log.debug(`${command} successful for ${this.name}`);
+      this.deviceStatus.timestamp = 0; // Force a refresh on next poll after a state change
+      this.commandInProgress = false;
+      return true;
+    } catch (error) {
+      this.log.error(`${command} failed for ${this.name}: ${error}`);
+      return false;
+    } finally {
+      this.commandInProgress = false;
+    }
   }
 
   // Wait for the condition to be true.  Will check every 500 ms

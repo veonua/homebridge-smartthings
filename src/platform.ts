@@ -20,7 +20,6 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   public readonly accessories: PlatformAccessory[] = [];
 
   private locationIDsToIgnore: string[] = [];
-  private roomsIDsToIgnore: string[] = [];
 
   private headerDict = {
     'Authorization': 'Bearer: ' + this.config.AccessToken,
