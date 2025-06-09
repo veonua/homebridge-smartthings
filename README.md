@@ -288,3 +288,8 @@ curl -X POST http://localhost:8080/event \
   -d '{"events":[{"deviceId":"<id>","componentId":"main","capability":"switch","attribute":"switch","value":"on"}]}'
 ```
 
+## Optimization Proposals
+
+- Cache device status to reduce API calls.
+- Use async/await with proper error handling for clearer control flow.
+- Consider batching SmartThings commands where supported.

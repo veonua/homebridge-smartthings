@@ -5,8 +5,8 @@ import { MultiServiceAccessory } from '../multiServiceAccessory';
 import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class ThermostatService extends BaseService {
-  targetHeatingCoolingState: any;
-  targetTemperature: any;
+  targetHeatingCoolingState: CharacteristicValue;
+  targetTemperature: number;
   units = 'C';
   supportsOperatingState = false;
 
