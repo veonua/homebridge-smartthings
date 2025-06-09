@@ -508,7 +508,7 @@ export class AirConditionerService extends BaseService {
     return this.temperatureUnit === TemperatureUnit.Farenheit ? (value * (9 / 5)) + 32 : value;
   }
 
-  private getModeFromStatus(status: any): string | undefined {
+  private getModeFromStatus(status: Record<string, any>): string | undefined {
     if (this.modeCapability === 'airConditionerMode') {
       return status.airConditionerMode.airConditionerMode.value as string;
     } else {
@@ -528,7 +528,7 @@ export class AirConditionerService extends BaseService {
 
   }
 
-  private async getDeviceStatus(): Promise<any> {
+  private async getDeviceStatus(): Promise<Record<string, any>> {
     this.multiServiceAccessory.forceNextStatusRefresh();
     if (!await this.getStatus()) {
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);

@@ -287,4 +287,3 @@ curl -X POST http://localhost:8080/event \
   -H 'Content-Type: application/json' \
   -d '{"events":[{"deviceId":"<id>","componentId":"main","capability":"switch","attribute":"switch","value":"on"}]}'
 ```
-
