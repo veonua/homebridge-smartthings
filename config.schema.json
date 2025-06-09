@@ -36,6 +36,12 @@
         "default": 0
       },
       "SmartAppClientId": {
+        "title": "SmartApp ID",
+        "type": "string",
+        "required": false,
+        "default": "a1fd6bcf-1d50-4e33-883a-4274db0d3fba"
+      },
+      "SmartAppClientId": {
         "title": "SmartApp Client ID",
         "type": "string",
         "required": false,
@@ -45,7 +51,7 @@
         "title": "SmartApp Client Secret",
         "type": "string",
         "required": false,
-        "default": "bd932369-b1b5-4431-a739-3cfc26f6cb1c"
+        "default": ""
       },
 
       "GarageDoorMaxPoll": {

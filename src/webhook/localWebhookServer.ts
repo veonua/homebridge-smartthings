@@ -1,124 +1,117 @@
 import express from 'express';
-import { SmartApp } from '@smartthings/smartapp';
+import { SmartApp, SmartAppContext, } from '@smartthings/smartapp';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 import { Logger } from 'homebridge';
 import { ShortEvent } from './subscriptionHandler';
 import { PlatformConfig } from 'homebridge';
+import { AppEvent } from '@smartthings/smartapp/lib/lifecycle-events';
 
 export class LocalWebhookServer {
   private app = express();
-    
+  
+  private capabilitiesToSubscribe = [
+    'switch',
+    'switchLevel',
+    'lock',
+    'contactSensor',
+    'motionSensor',
+    'temperatureMeasurement',
+    'illuminanceMeasurement',
+    'thermostatCoolingSetpoint',
+    'thermostatHeatingSetpoint',
+    'thermostatMode',
+    'windowShade',
+    'windowShadeLevel'
+  ];
+
+  private async processDeviceEvent(context: SmartAppContext,
+			eventData: AppEvent.DeviceEvent,
+			eventTime?: string) {
+/*
+ Received event: {
+ "eventId":"488b4baa-451a-11f0-b273-b34dfcf2419e",
+ "locationId":"8db57189-6b62-4033-97d2-d2c53fdb599f",
+ "ownerId":"8db57189-6b62-4033-97d2-d2c53fdb599f",
+ "ownerType":"LOCATION",
+ "deviceId":"1a846e4f-4b13-4a57-bef4-7301f0ec98fe",
+ "componentId":"main",
+ "capability":"switch",
+ "attribute":"switch",
+ "value":"on",
+ "valueType":"string",
+ "stateChange":true,
+ "data":{},
+ "subscriptionName":"switch-events"}
+2025-06-09T10:12:44.303Z debug: RESPONSE: {
+  "statusCode": 200,
+  "eventData": {}
+}
+ */
+
+    this.log.info(`Received event: ${JSON.stringify(eventData)}`);
+    const shortEvent: ShortEvent = {
+      deviceId: eventData.deviceId,
+      componentId: eventData.componentId,
+      capability: eventData.capability,
+      attribute: eventData.attribute,
+      value: eventData.value,
+    };
+
+    const device = this.devices.find(d => d.id === shortEvent.deviceId);
+    if (device) {
+      device.processEvent(shortEvent);
+    } else {
+      this.log.warn(`Device with ID ${shortEvent.deviceId} not found for event processing.`);
+    }
+  }
+  
   private server; // NodeJS HTTP server
   constructor(private log: Logger, public readonly config: PlatformConfig, private devices: MultiServiceAccessory[], private port: number) {
+    if (!config.SmartAppClientId || !config.SmartAppClientSecret || !config.SmartAppId) {
+      this.log.error('SmartAppClientId, SmartAppClientSecret, and SmartAppId must be configured in the platform config.');
+      throw new Error('Missing SmartApp configuration');
+    }
+    
     const smartapp = new SmartApp()
     .enableEventLogging(2)
-    .clientId(config.SmartAppClientId || "8a4b3887-fa4e-4994-a067-7fcec1bfa61e")
-    .clientSecret(config.SmartAppClientSecret || "bd932369-b1b5-4431-a739-3cfc26f6cb1c")
-    .appId("a1fd6bcf-1d50-4e33-883a-4274db0d3fba").permissions(['r:devices:*', 'x:devices:*', 'r:locations:*', 'r:scenes:*'])
+    .clientId(config.SmartAppClientId).clientSecret(config.SmartAppClientSecret)
+    .appId(config.SmartAppId).permissions(['r:devices:*', 'x:devices:*', 'r:locations:*', 'r:scenes:*'])
     .disableCustomDisplayName(true)
-    .subscribedEventHandler('switches', async (context, event) => {
-      this.log.info(`Received event: ${JSON.stringify(event)}`);
-      const shortEvent: ShortEvent = {
-        deviceId: event.deviceId,
-        componentId: event.componentId,
-        capability: event.capability,
-        attribute: event.attribute,
-        value: event.value,
-      };
-
-      const device = this.devices.find(d => d.id === shortEvent.deviceId);
-      if (device) {
-        device.processEvent(shortEvent);
-      }
+    .subscribedDeviceLifecycleEventHandler('lifecycle', async (context, event) => {
+      this.log.info(`Lifecycle event: ${JSON.stringify(event)}`);
     })
-    .subscribedEventHandler('contactSensors', async (context, event) => {
-      this.log.info(`Received event: ${JSON.stringify(event)}`);
-      const shortEvent: ShortEvent = {
-        deviceId: event.deviceId,
-        componentId: event.componentId,
-        capability: event.capability,
-        attribute: event.attribute,
-        value: event.value,
-      };
-
-      const device = this.devices.find(d => d.id === shortEvent.deviceId);
-      if (device) {
-        device.processEvent(shortEvent);
-      }
-    })
-    .subscribedEventHandler('windowShadeLevels', async (context, event) => {
-      this.log.info(`Received event: ${JSON.stringify(event)}`);
-      const shortEvent: ShortEvent = {
-        deviceId: event.deviceId,
-        componentId: event.componentId,
-        capability: event.capability,
-        attribute: event.attribute,
-        value: event.value,
-      };
-
-      const device = this.devices.find(d => d.id === shortEvent.deviceId);
-      if (device) {
-        device.processEvent(shortEvent);
-      }
+    .subscribedDeviceHealthEventHandler('health', async (context, event) => {
+      this.log.info(`Health event: ${JSON.stringify(event)}`);
     })
     // Configuration page definition
     .page('mainPage', (_, page) => {
 
-      // If the account exists, i.e. the user has logged in via the OAuth process, then display
-			// the connection options
-			page.section('types', section => {
+        page.section('types', section => {
 				section.booleanSetting('switches').defaultValue("true")
 				section.booleanSetting('locks').defaultValue("true")
         section.booleanSetting('devices').defaultValue("true")
 			});
 
 			page.complete(true)
-
-      // prompts user to select a contact sensor
-      page.section('sensors', section => {
-        section
-          .deviceSetting('contactSensor')
-          .capabilities(['contactSensor'])
-          .multiple(true)
-          .required(false)
-      })
-
-      // prompts users to select one or more switch devices
-      page.section('lights', section => {
-        section
-          .deviceSetting('lights')
-          .capabilities(['switch'])
-          .required(false)
-          .multiple(true)
-          .permissions('rx')
-      })
     })
-    .updated(async (context) => {
+    .updated(async (context: SmartAppContext, updateData: AppEvent.UpdateData) => {
       await context.api.subscriptions.delete()
-      await context.api.subscriptions.subscribeToCapability("switch", "*", "switches")
-      //await context.api.subscriptions.subscribeToCapability("switchLevel", "*", "devices")
+      
+      this.capabilitiesToSubscribe.forEach(async (capability) => {
+        await context.api.subscriptions.subscribeToCapability(capability, "*", capability + "-events");
+      });
 
-      //await context.api.subscriptions.subscribeToCapability("lock", "*", "devices")
-      await context.api.subscriptions.subscribeToCapability("contactSensor", "*", "contactSensors")
-      // await context.api.subscriptions.subscribeToCapability("motionSensor", "*", "motionSensors")
-      // await context.api.subscriptions.subscribeToCapability("temperatureMeasurement", "*", "temperatureMeasurements")
-      // await context.api.subscriptions.subscribeToCapability("illuminanceMeasurement", "*", "illuminanceMeasurements")
-      // await context.api.subscriptions.subscribeToCapability("powerMeter", "*", "powerMeters")
-      // await context.api.subscriptions.subscribeToCapability("energyMeter", "*", "energyMeters")
-      // await context.api.subscriptions.subscribeToCapability("switchLevel", "*", "switchLevels")
-      // await context.api.subscriptions.subscribeToCapability("thermostatCoolingSetpoint", "*", "thermostatCoolingSetpoints")
-      // await context.api.subscriptions.subscribeToCapability("thermostatHeatingSetpoint", "*", "thermostatHeatingSetpoints")
-      // await context.api.subscriptions.subscribeToCapability("thermostatMode", "*", "thermostatModes")
-      // await context.api.subscriptions.subscribeToCapability("windowShade", "*", "windowShades")
-      await context.api.subscriptions.subscribeToCapability("windowShadeLevel", "*", "windowShadeLevels")
+      await context.api.subscriptions.subscribeToDeviceLifecycle("lifecycle");
+      await context.api.subscriptions.subscribeToDeviceHealth("health");
+    });
 
+    this.capabilitiesToSubscribe.forEach((capability) => {
+      smartapp.subscribedDeviceEventHandler(capability + '-events', async (context, event) => {
+        return  this.processDeviceEvent(context, event);
+      });
     });
 
     this.app.use(express.json());
-    this.app.get('/oauth', (req, res) => {
-      console.log(JSON.stringify(req.query));
-      res.send("OK");
-    });
     this.app.post('/webhook', (req, res) => {
       console.log(JSON.stringify(req.query));
       console.log(req.header('Authorization'));
@@ -129,8 +122,6 @@ export class LocalWebhookServer {
       console.log(req.header('Authorization'));
       smartapp.handleHttpCallback(req, res);
     });
-    
-    
 
     // Optional manual event injection for testing via Postman
     this.app.post('/event', (req, res) => {
