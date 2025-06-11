@@ -1,11 +1,11 @@
 import { PlatformAccessory, CharacteristicValue, WithUUID, Characteristic, Service } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
-import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { MultiServiceAccessory, Component } from '../multiServiceAccessory';
 
 export abstract class SensorService extends BaseService {
   statusFailureCount = 0;
-  statusTranslation: (status) => CharacteristicValue | null = () => {
+  statusTranslation: (status: Component['status']) => CharacteristicValue | null = () => {
     return null;
   };
 
@@ -15,12 +15,12 @@ export abstract class SensorService extends BaseService {
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
     multiServiceAccessory: MultiServiceAccessory,
-    name: string, deviceStatus) {
+    name: string, deviceStatus: Component) {
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
   }
 
   protected initService(sensorService: WithUUID<typeof Service>, sensorCharacteristic: WithUUID<new () => Characteristic>,
-    statusTranslation: (status) => CharacteristicValue) {
+    statusTranslation: (status: Component['status']) => CharacteristicValue) {
     this.statusTranslation = statusTranslation;
     this.setServiceType(sensorService);
     this.characteristic = sensorCharacteristic;

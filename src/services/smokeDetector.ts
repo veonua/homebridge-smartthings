@@ -1,6 +1,6 @@
 import { PlatformAccessory } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
-import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { MultiServiceAccessory, Component } from '../multiServiceAccessory';
 import { SensorService } from './sensorService';
 import { ShortEvent } from '../webhook/subscriptionHandler';
 
@@ -8,13 +8,13 @@ export class SmokeDetectorService extends SensorService {
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
     multiServiceAccessory: MultiServiceAccessory,
-    name: string, deviceStatus) {
+    name: string, deviceStatus: Component) {
 
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.initService(platform.Service.SmokeSensor,
       platform.Characteristic.SmokeDetected,
-      (status) => {
+      (status: Component['status']) => {
         if (status.smokeDetector.smoke.value === null || status.smokeDetector.smoke.value === undefined) {
           this.log.warn(`${this.name} returned bad value for status`);
           throw('Bad Value');

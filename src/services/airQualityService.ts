@@ -1,18 +1,18 @@
 import { PlatformAccessory } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { SensorService } from './sensorService';
-import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { MultiServiceAccessory, Component } from '../multiServiceAccessory';
 import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class AirQualityService extends SensorService {
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
     multiServiceAccessory: MultiServiceAccessory,
-    name: string, deviceStatus) {
+    name: string, deviceStatus: Component) {
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.log.debug(`Adding AirQualityService to ${this.name}`);
-    this.initService(platform.Service.AirQualitySensor, platform.Characteristic.AirQuality, (status) => {
+    this.initService(platform.Service.AirQualitySensor, platform.Characteristic.AirQuality, (status: Component['status']) => {
       const co2 = status.carbonDioxideMeasurement.carbonDioxide.value;
       const pm25Density = status.dustSensor.fineDustLevel.value;
 

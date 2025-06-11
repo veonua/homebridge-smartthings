@@ -1,6 +1,6 @@
 import { PlatformAccessory, CharacteristicValue, Service } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
-import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { MultiServiceAccessory, Component } from '../multiServiceAccessory';
 import { Command } from './smartThingsCommand';
 import { ShortEvent } from '../webhook/subscriptionHandler';
 import { BaseService } from './baseService';
@@ -60,7 +60,7 @@ export class AirConditionerService extends BaseService {
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
     multiServiceAccessory: MultiServiceAccessory,
-    name: string, deviceStatus) {
+    name: string, deviceStatus: Component) {
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.log.info(`Adding AirConditionerService to ${this.name}`);
@@ -508,7 +508,7 @@ export class AirConditionerService extends BaseService {
     return this.temperatureUnit === TemperatureUnit.Farenheit ? (value * (9 / 5)) + 32 : value;
   }
 
-  private getModeFromStatus(status: Record<string, any>): string | undefined {
+  private getModeFromStatus(status: Record<string, unknown>): string | undefined {
     if (this.modeCapability === 'airConditionerMode') {
       return status.airConditionerMode.airConditionerMode.value as string;
     } else {
@@ -528,7 +528,7 @@ export class AirConditionerService extends BaseService {
 
   }
 
-  private async getDeviceStatus(): Promise<Record<string, any>> {
+  private async getDeviceStatus(): Promise<Record<string, unknown>> {
     this.multiServiceAccessory.forceNextStatusRefresh();
     if (!await this.getStatus()) {
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);

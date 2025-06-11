@@ -8,7 +8,7 @@ import { MultiServiceAccessory } from '../multiServiceAccessory';
 
 export interface ShortEvent {
   deviceId: string;
-  value: any;
+  value: string | number | boolean | null;
   componentId: string;
   capability: string;
   attribute: string;

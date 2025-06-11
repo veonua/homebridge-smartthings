@@ -34,7 +34,7 @@ import { Command } from './services/smartThingsCommand';
  * Each accessory may expose multiple services of different service types.
  */
 // export class MultiServiceAccessory extends BasePlatformAccessory {
-interface Component {
+export interface Component {
   componentId: string;
   capabilities: string[];
   status: Record<string, unknown>;
@@ -218,7 +218,15 @@ export class MultiServiceAccessory {
     capabilitiesToCover: string[],
     capabilities: string[],
     optionalCapabilities: string[],
-    serviceConstructor: new (...args: any[]) => BaseService,
+    serviceConstructor: new (
+      platform: IKHomeBridgeHomebridgePlatform,
+      accessory: PlatformAccessory,
+      componentId: string,
+      capabilities: string[],
+      multiServiceAccessory: MultiServiceAccessory,
+      name: string,
+      deviceStatus: Component,
+    ) => BaseService,
   ): string[] {
     // this.log.debug(`Testing ${serviceConstructor.name} for capabilities ${capabilitiesToCover}`);
     // ignore services which cannot cover all required capabilities
@@ -239,7 +247,7 @@ export class MultiServiceAccessory {
   }
 
   public addComponent(componentId: string, capabilities: string[]) {
-    const component = {
+    const component: Component = {
       componentId,
       capabilities,
       status: {},

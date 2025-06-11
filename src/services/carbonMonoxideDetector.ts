@@ -1,6 +1,6 @@
 import { PlatformAccessory } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
-import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { MultiServiceAccessory, Component } from '../multiServiceAccessory';
 import { SensorService } from './sensorService';
 import { ShortEvent } from '../webhook/subscriptionHandler';
 
@@ -9,13 +9,13 @@ export class CarbonMonoxideDetectorService extends SensorService {
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
     multiServiceAccessory: MultiServiceAccessory,
-    name: string, deviceStatus) {
+    name: string, deviceStatus: Component) {
 
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.initService(platform.Service.CarbonMonoxideSensor,
       platform.Characteristic.CarbonMonoxideDetected,
-      (status) => {
+      (status: Component['status']) => {
         const deviceStatus = status.carbonMonoxideDetector.carbonMonoxide.value;
         if (deviceStatus === null || deviceStatus === undefined) {
           this.log.warn(`${this.name} returned bad value for status`);

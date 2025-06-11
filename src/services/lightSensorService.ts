@@ -1,19 +1,19 @@
 import { PlatformAccessory } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { SensorService } from './sensorService';
-import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { MultiServiceAccessory, Component } from '../multiServiceAccessory';
 import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class LightSensorService extends SensorService {
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities:string[],
     multiServiceAccessory: MultiServiceAccessory,
-    name: string, deviceStatus) {
+    name: string, deviceStatus: Component) {
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.log.debug(`Adding LightSensorService to ${this.name}`);
 
-    this.initService(platform.Service.LightSensor, platform.Characteristic.CurrentAmbientLightLevel, (status) => {
+    this.initService(platform.Service.LightSensor, platform.Characteristic.CurrentAmbientLightLevel, (status: Component['status']) => {
       if (status.illuminanceMeasurement.illuminance.value === null || status.illuminanceMeasurement.illuminance.value === undefined) {
         this.log.warn(`${this.name} returned bad value for status`);
         throw('Bad Value');

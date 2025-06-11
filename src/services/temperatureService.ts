@@ -1,6 +1,6 @@
 import { PlatformAccessory } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
-import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { MultiServiceAccessory, Component } from '../multiServiceAccessory';
 import { SensorService } from './sensorService';
 import { ShortEvent } from '../webhook/subscriptionHandler';
 
@@ -9,12 +9,12 @@ export class TemperatureService extends SensorService {
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
     multiServiceAccessory: MultiServiceAccessory,
-    name: string, deviceStatus) {
+    name: string, deviceStatus: Component) {
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.log.debug(`Adding TemperatureService to ${this.name}`);
 
-      this.initService(platform.Service.TemperatureSensor, platform.Characteristic.CurrentTemperature, (status) => {
+      this.initService(platform.Service.TemperatureSensor, platform.Characteristic.CurrentTemperature, (status: Component['status']) => {
         if (status.temperatureMeasurement.temperature.value === null || status.temperatureMeasurement.temperature.value === undefined ||
           status.temperatureMeasurement.temperature.unit === null || status.temperatureMeasurement.temperature.unit === undefined) {
           this.log.warn(`${this.name} returned bad value for status`);
