@@ -2,7 +2,7 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class WindowCoveringService extends BaseService {
   private targetPosition = 0;
@@ -33,17 +33,6 @@ export class WindowCoveringService extends BaseService {
       .onGet(this.getTargetPosition.bind(this))
       .onSet(this.setTargetPosition.bind(this));
 
-    let pollWindowShadesSeconds = 10; // default to 10 seconds
-    if (this.platform.config.PollWindowShadesSeconds !== undefined) {
-      pollWindowShadesSeconds = this.platform.config.PollSwitchesAndLightsSeconds;
-    }
-
-    if (pollWindowShadesSeconds > 0) {
-      multiServiceAccessory.startPollingState(pollWindowShadesSeconds, this.getCurrentPosition.bind(this), this.service,
-        platform.Characteristic.CurrentPosition, platform.Characteristic.TargetPosition, this.getTargetPosition.bind(this));
-      multiServiceAccessory.startPollingState(pollWindowShadesSeconds, this.getCurrentPositionState.bind(this), this.service,
-        platform.Characteristic.PositionState);
-    }
 
     if (this.capabilities.includes('windowShadeLevel')) {
       this.useWindowShadeLevel = true;
@@ -55,34 +44,12 @@ export class WindowCoveringService extends BaseService {
    * Handle "SET" requests from HomeKit
    * These are sent when the user changes the state of an accessory, for example, turning on a Light bulb.
    */
-  async setTargetPosition(value: CharacteristicValue) {
-
-    this.log.debug('Received setTargetPosition(' + value + ') event for ' + this.name);
-
+  async setTargetPosition(value: CharacteristicValue): Promise<void> {
+    const capability = this.useWindowShadeLevel ? 'windowShadeLevel' : 'switchLevel';
+    const command = this.useWindowShadeLevel ? 'setShadeLevel' : 'setLevel';
+    await this.sendCommandOrFail(capability, command, [value]);
     this.targetPosition = value as number;
-
-    if (!this.multiServiceAccessory.isOnline()) {
-      this.log.error(this.name + ' is offline');
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-
-    let capability = 'switchLevel';
-    let command = 'setLevel';
-
-    if (this.useWindowShadeLevel) {
-      capability = 'windowShadeLevel';
-      command = 'setShadeLevel';
-    }
-
-    this.multiServiceAccessory.sendCommand(capability, command, [value])
-      .then(() => {
-        this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-        this.multiServiceAccessory.forceNextStatusRefresh();
-      })
-      .catch(reason => {
-        this.log.error('onSet(' + value + ') FAILED for ' + this.name + ': reason ' + reason);
-        throw (new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-      });
+    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   async getTargetPosition(): Promise<CharacteristicValue> {
@@ -135,15 +102,12 @@ export class WindowCoveringService extends BaseService {
 
     return new Promise<CharacteristicValue>((resolve, reject) => {
 
-      if (!this.multiServiceAccessory.isOnline()) {
-        this.log.error(this.name + ' is offline');
-        return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-      }
+
 
       this.getStatus().then(success => {
 
         if (success) {
-          let position = 0;
+          let position: number;
           if (this.useWindowShadeLevel) {
             position = this.deviceStatus.status.windowShadeLevel.shadeLevel.value;
           } else {

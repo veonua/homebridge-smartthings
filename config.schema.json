@@ -23,72 +23,26 @@
         "required": true,
         "default": ""
       },
-      "WebhookToken": {
-        "title": "Webhook Token",
+      "LocalHubTokenFile": {
+        "title": "Local Hub Token File",
+        "description": "Absolute path to the hub credentials JSON file on the Homebridge host.",
         "type": "string",
         "required": false,
         "default": ""
       },
-      "LocalWebhookPort": {
-        "title": "Local Webhook Port",
-        "type": "integer",
+      "LocalHubAutoRenew": {
+        "title": "Automatically Renew Local Hub Token",
+        "description": "Use the Samsung account credentials in the same private directory to renew the hub token.",
+        "type": "boolean",
         "required": false,
-        "default": 0
+        "default": false
       },
-      "SmartAppId": {
-        "title": "SmartApp ID",
-        "type": "string",
+      "LocalHubEvents": {
+        "title": "Local Hub Events",
+        "description": "Receive device events directly from the local hub using SSE.",
+        "type": "boolean",
         "required": false,
-        "default": "a1fd6bcf-1d50-4e33-883a-4274db0d3fba"
-      },
-      "SmartAppClientId": {
-        "title": "SmartApp Client ID",
-        "type": "string",
-        "required": false,
-        "default": "8a4b3887-fa4e-4994-a067-7fcec1bfa61e"
-      },
-      "SmartAppClientSecret": {
-        "title": "SmartApp Client Secret",
-        "type": "string",
-        "required": false,
-        "default": ""
-      },
-
-      "GarageDoorMaxPoll": {
-        "title": "Garage Door Max Poll",
-        "type": "integer",
-        "required": true,
-        "default": 40
-      },
-      "PollLocksSeconds": {
-        "title": "Poll Locks (zero = don't poll)",
-        "type": "integer",
-        "required": false,
-        "default": 10
-      },
-      "PollDoorsSeconds": {
-        "title": "Poll Garage Doors (zero = don't poll)",
-        "type": "integer",
-        "required": false,
-        "default": 10
-      },
-      "PollSensorsSeconds": {
-        "title": "Poll Sensors (zero = don't poll)",
-        "type": "integer",
-        "required": false,
-        "default": 5
-      },
-      "PollSwitchesAndLightsSeconds": {
-        "title": "Poll Switches and Lights (zero = don't poll)",
-        "type": "integer",
-        "required": false,
-        "default": 10
-      },
-      "PollWindowShadesSeconds": {
-        "title": "Poll Window Shades (zero = don't poll)",
-        "type": "integer",
-        "required": false,
-        "default": 20
+        "default": false
       },
       "ExposeHumiditySensorForAirConditioners": {
         "title": "Expose humidity Sensor for air Conditioners if available.",

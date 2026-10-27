@@ -1,5 +1,4 @@
-import { PlatformAccessory, Characteristic, CharacteristicValue, Service, WithUUID, Logger, API } from 'homebridge';
-import axios = require('axios');
+import { PlatformAccessory, Characteristic, Logger, API } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from './platform';
 import { BaseService } from './services/baseService';
 // import { BasePlatformAccessory } from './basePlatformAccessory';
@@ -19,7 +18,7 @@ import { LeakDetectorService } from './services/leakDetector';
 import { SmokeDetectorService } from './services/smokeDetector';
 import { CarbonMonoxideDetectorService } from './services/carbonMonoxideDetector';
 import { ValveService } from './services/valveService';
-import { ShortEvent } from './webhook/subscriptionHandler';
+import { ShortEvent } from './shortEvent';
 import { FanSpeedService } from './services/fanSpeedService';
 import { WindowCoveringService } from './services/windowCoveringService';
 import { ThermostatService } from './services/thermostatService';
@@ -38,6 +37,51 @@ interface Component {
   componentId: string;
   capabilities: string[];
   status: Record<string, unknown>;
+}
+
+// Attributes read by the services below. Other capabilities may be command-only
+// or optional and are not required for a local status response.
+const STATUS_ATTRIBUTES: Record<string, string[]> = {
+  switch: ['switch'], switchLevel: ['level'], colorControl: ['hue', 'saturation'],
+  colorTemperature: ['colorTemperature'], fanSpeed: ['fanSpeed'],
+  doorControl: ['door'], lock: ['lock'], valve: ['valve'],
+  windowShade: ['windowShade'], windowShadeLevel: ['shadeLevel'],
+  motionSensor: ['motion'], waterSensor: ['water'], smokeDetector: ['smoke'],
+  carbonMonoxideDetector: ['carbonMonoxide'], presenceSensor: ['presence'],
+  temperatureMeasurement: ['temperature'], relativeHumidityMeasurement: ['humidity'],
+  illuminanceMeasurement: ['illuminance'], contactSensor: ['contact'], battery: ['battery'],
+  carbonDioxideMeasurement: ['carbonDioxide'], dustSensor: ['fineDustLevel'], button: ['button'],
+  thermostatMode: ['thermostatMode'], thermostatHeatingSetpoint: ['heatingSetpoint'],
+  thermostatCoolingSetpoint: ['coolingSetpoint'], airConditionerMode: ['airConditionerMode'],
+  airConditionerFanMode: ['fanMode'], fanOscillationMode: ['fanOscillationMode'],
+  'custom.airConditionerOptionalMode': ['acOptionalMode'],
+};
+
+const STRING_VALUES: Record<string, string[]> = {
+  switch: ['on', 'off'], doorControl: ['open', 'closed', 'opening', 'closing'],
+  lock: ['locked', 'unlocked', 'unlocked with timeout', 'unknown'], valve: ['open', 'closed'],
+  windowShade: ['open', 'closed', 'opening', 'closing', 'partially open'],
+  motionSensor: ['active', 'inactive'], waterSensor: ['wet', 'dry'],
+  smokeDetector: ['detected', 'clear', 'tested'], carbonMonoxideDetector: ['detected', 'clear', 'tested'],
+  presenceSensor: ['present', 'not present'], contactSensor: ['open', 'closed'],
+  thermostatMode: ['off', 'heat', 'cool', 'auto', 'emergency heat'],
+  airConditionerMode: ['off', 'heat', 'cool', 'auto', 'dry', 'fanOnly'],
+  airConditionerFanMode: ['auto', 'low', 'medium', 'high', 'turbo'],
+  fanOscillationMode: ['all', 'fixed', 'vertical'],
+  'custom.airConditionerOptionalMode': ['off', 'sleep', 'speed', 'windFree', 'windFreeSleep'],
+};
+
+function validEvent(event: ShortEvent): boolean {
+  if (!STATUS_ATTRIBUTES[event.capability]?.includes(event.attribute)) {
+    return false;
+  }
+  if (event.capability === 'button') {
+    return typeof event.value === 'string' && /^(pushed|down|held)(?:_[a-z0-9]+)?$/i.test(event.value);
+  }
+  if (STRING_VALUES[event.capability]) {
+    return typeof event.value === 'string' && STRING_VALUES[event.capability].includes(event.value);
+  }
+  return typeof event.value === 'number' && Number.isFinite(event.value);
 }
 
 export class MultiServiceAccessory {
@@ -148,23 +192,20 @@ export class MultiServiceAccessory {
   public readonly name: string;
   protected characteristic: typeof Characteristic;
   protected log: Logger;
-  protected baseURL: string;
-  protected key: string;
-  protected axInstance: axios.AxiosInstance;
-  protected commandURL: string;
-  protected statusURL: string;
-  protected healthURL: string;
   protected api: API;
   protected online = true;
   //protected deviceStatus: DeviceStatus = { timestamp: 0, status: undefined };
   protected deviceStatusTimestamp = 0;
   protected failureCount = 0;
-  protected giveUpTime = 0;
   protected commandInProgress = false;
-  protected lastCommandCompleted = 0;
+  private commandTail: Promise<void> = Promise.resolve();
 
   protected statusQueryInProgress = false;
   protected lastStatusResult = true;
+  private eventRevision = 0;
+  private hasReceivedEvent = false;
+  private readonly eventAttributes = new Map<string, { revision: number; time?: number; value: any }>();
+  private readonly eventIds = new Set<string>();
 
   get id() {
     return this.accessory.UUID;
@@ -180,19 +221,7 @@ export class MultiServiceAccessory {
     this.platform = platform;
     this.name = accessory.context.device.label;
     this.log = platform.log;
-    this.baseURL = platform.config.BaseURL;
-    this.key = platform.config.AccessToken;
     this.api = platform.api;
-    const headerDict = { 'Authorization': 'Bearer: ' + this.key };
-
-    this.axInstance = axios.default.create({
-      baseURL: this.baseURL,
-      headers: headerDict,
-    });
-
-    this.commandURL = 'devices/' + accessory.context.device.deviceId + '/commands';
-    this.statusURL = 'devices/' + accessory.context.device.deviceId + '/status';
-    this.healthURL = 'devices/' + accessory.context.device.deviceId + '/health';
     this.characteristic = platform.Characteristic;
 
     // set accessory information
@@ -202,13 +231,18 @@ export class MultiServiceAccessory {
       .setCharacteristic(platform.Characteristic.SerialNumber, 'Default-Serial');
 
     // // Find out if we are online
-    this.axInstance.get(this.healthURL)
-      .then(res => {
-        if (res.data.state === 'ONLINE') {
+    this.platform.getDeviceData<{ state: string }>(this.id, 'health')
+      .then(health => {
+        if (this.hasReceivedEvent) {
+          return;
+        }
+        if (health.state === 'ONLINE') {
           this.online = true;
         } else {
           this.online = false;
         }
+      }).catch(error => {
+        this.log.warn(`Could not get health for ${this.name}: ${error}`);
       });
   }
 
@@ -312,21 +346,49 @@ export class MultiServiceAccessory {
 
     this.log.debug(`Calling Smartthings to get an update for ${this.name}`);
     this.statusQueryInProgress = true;
-    this.failureCount = 0;
     await this.waitFor(() => !this.commandInProgress);
+    const requestRevision = this.eventRevision;
 
     try {
-      const res = await this.axInstance.get(this.statusURL);
-      const componentsStatus = res.data.components;
+      const status = await this.platform.getDeviceData<{ components: Record<string, Record<string, unknown>> }>(
+        this.id, 'status', data => this.components.every(component => {
+          const componentStatus = data.components?.[component.componentId];
+          if (!componentStatus || typeof componentStatus !== 'object') {
+            return false;
+          }
+          return component.capabilities.every(capability => capability === 'button' ||
+            (STATUS_ATTRIBUTES[capability] || []).every(attribute => {
+            const value = (componentStatus as any)[capability]?.[attribute];
+            return value && value.value !== null && value.value !== undefined &&
+              (capability !== 'temperatureMeasurement' || (value.unit !== null && value.unit !== undefined));
+          }));
+        }),
+      );
+      const componentsStatus = status.components;
       this.components.forEach(component => {
         if (componentsStatus[component.componentId] !== undefined) {
-          component.status = componentsStatus[component.componentId];
+          const next = componentsStatus[component.componentId];
+          for (const [key, saved] of this.eventAttributes) {
+            const [componentId, capability, attribute] = JSON.parse(key) as string[];
+            if (componentId !== component.componentId) {
+              continue;
+            }
+            const snapshot = (next as any)[capability]?.[attribute];
+            const snapshotTime = typeof snapshot?.timestamp === 'string' ? Date.parse(snapshot.timestamp) : NaN;
+            if (saved.revision > requestRevision || (saved.time !== undefined &&
+              (!Number.isFinite(snapshotTime) || snapshotTime < saved.time))) {
+              (next as any)[capability] ||= {};
+              (next as any)[capability][attribute] = saved.value;
+            }
+          }
+          component.status = next;
           this.deviceStatusTimestamp = Date.now();
           this.log.debug(`Updated status for ${this.name}-${component.componentId}: ${JSON.stringify(component.status)}`);
         } else {
           this.log.error(`Failed to get status for ${this.name}-${component.componentId}`);
         }
       });
+      this.failureCount = 0;
       this.lastStatusResult = true;
       return true;
     } catch (error) {
@@ -334,7 +396,6 @@ export class MultiServiceAccessory {
       this.log.error(`Failed to request status from ${this.name}: ${error}.  This is failure number ${this.failureCount}`);
       if (this.failureCount >= 5) {
         this.log.error(`Exceeded allowed failures for ${this.name}.  Device is offline`);
-        this.giveUpTime = Date.now();
         this.online = false;
       }
       this.lastStatusResult = false;
@@ -349,79 +410,50 @@ export class MultiServiceAccessory {
   }
 
 
-  // public startPollingState(pollSeconds: number, getValue: () => Promise<CharacteristicValue>, service: Service,
-  //   chracteristic: WithUUID<new () => Characteristic>, targetStateCharacteristic?: WithUUID<new () => Characteristic>,
-  //   getTargetState?: () => Promise<CharacteristicValue>) {
-  //   return super.startPollingState(pollSeconds, getValue, service, chracteristic, targetStateCharacteristic, getTargetState);
-  // }
-
-  startPollingState(pollSeconds: number, getValue: () => Promise<CharacteristicValue>, service: Service,
-    chracteristic: WithUUID<new () => Characteristic>, targetStateCharacteristic?: WithUUID<new () => Characteristic>,
-    getTargetState?: () => Promise<CharacteristicValue>): NodeJS.Timeout | void {
-
-    if (this.platform.config.WebhookToken && this.platform.config.WebhookToken !== '') {
-      return;  // Don't poll if we have a webhook token
+  /** Recheck an offline device on demand, at reconnect, or when a valid event arrives. */
+  public async ensureOnline(): Promise<boolean> {
+    if (this.online) {
+      return true;
     }
-
-    if (pollSeconds > 0) {
-      return setInterval(() => {
-        // If we are in the middle of a commmand call, or it hasn't been at least 10 seconds, we don't want to poll.
-        if (this.commandInProgress || Date.now() - this.lastCommandCompleted < 20 * 1000) {
-          // Skip polling until command is complete
-          this.log.debug(`Command in progress, skipping polling for ${this.name}`);
-          return;
-        }
-        if (this.online) {
-          this.log.debug(`${this.name} polling...`);
-          // this.commandInProgress = true;
-          getValue().then((v) => {
-            service.updateCharacteristic(chracteristic, v);
-            this.log.debug(`${this.name} value updated.`);
-          }).catch(() => {  // If we get an error, ignore
-            this.log.warn(`Poll failure on ${this.name}`);
-            return;
-          });
-          // Update target if we have to
-          if (targetStateCharacteristic && getTargetState) {
-            //service.updateCharacteristic(targetStateCharacteristic, getTargetState());
-            getTargetState().then(value => service.updateCharacteristic(targetStateCharacteristic, value));
-          }
-        } else {
-          // If we failed this accessory due to errors. Reset the failure count and online status after 10 minutes.
-          if (this.giveUpTime > 0 && (Date.now() - this.giveUpTime > (10 * 60 * 1000))) {
-            this.axInstance.get(this.healthURL)
-              .then(res => {
-                if (res.data.state === 'ONLINE') {
-                  this.online = true;
-                  this.giveUpTime = 0;
-                  this.failureCount = 0;
-                }
-              });
-          }
-        }
-      }, pollSeconds * 1000 + Math.floor(Math.random() * 1000));  // Add a random delay to avoid collisions
+    try {
+      const health = await this.platform.getDeviceData<{ state: string }>(this.id, 'health');
+      if (health.state === 'ONLINE') {
+        this.online = true;
+        this.failureCount = 0;
+      }
+    } catch (error) {
+      this.log.debug(`Could not recheck health for ${this.name}: ${error}`);
     }
+    return this.online;
   }
 
-  async sendCommand(capability: string, command: string, args?: unknown[]): Promise<boolean> {
-    const cmd = new Command(capability, command, args);
+  async sendCommand(capability: string, command: string, args?: unknown[], componentId?: string): Promise<boolean> {
+    const cmd = new Command(capability, command, args, componentId);
     return this.sendCommands([cmd]);
   }
 
-  async sendCommands(commands: Command[]): Promise<boolean> {
-    const commandBody = JSON.stringify({ commands });
-    await this.waitFor(() => !this.commandInProgress);
+  async sendCommands(commands: Command[], componentId?: string): Promise<boolean> {
+    // Reserve our place before yielding so simultaneous HomeKit writes stay ordered.
+    const previous = this.commandTail || Promise.resolve();
+    let release: () => void = () => {};
+    this.commandTail = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    await previous;
     this.commandInProgress = true;
     try {
-      await this.axInstance.post(this.commandURL, commandBody);
-      this.log.debug(`${JSON.stringify(commands)} successful for ${this.name}`);
-      this.deviceStatusTimestamp = 0; // Force a refresh on next poll after a state change
+      const routed = commands.map(command => componentId && !command.component
+        ? { ...command, component: componentId } : command);
+      const route = await this.platform.sendDeviceCommands(this.id, routed);
+      this.log.info(`SmartThings command accepted via ${route} for ${this.name}`);
+      this.deviceStatusTimestamp = 0; // Refresh on the next explicit status request.
       return true;
     } catch (error) {
       this.log.error(`${JSON.stringify(commands)} failed for ${this.name}: ${error}`);
       return false;
     } finally {
       this.commandInProgress = false;
+      release();
     }
   }
 
@@ -444,18 +476,93 @@ export class MultiServiceAccessory {
     });
   }
 
-  public processEvent(event: ShortEvent): void {
-    this.log.debug(`Received events for ${this.name}`);
-
-    const service = this.services.find(s => s.componentId === event.componentId && s.capabilities.find(c => c === event.capability));
-
-    if (service) {
-      this.log.debug(`Event for ${this.name}:${event.componentId} - ${event.value}`);
-      service.processEvent(event);
-    } else {
-      this.log.warn(`No service found for ${this.name}:${event.componentId} - ${event.value}`);
+  public processEvent(event: ShortEvent): boolean {
+    if (event.deviceId !== this.id || !validEvent(event) || (event.eventId && this.eventIds.has(event.eventId))) {
+      return false;
     }
+    const component = this.components.find(c => c.componentId === event.componentId && c.capabilities.includes(event.capability));
+    if (!component) {
+      return false;
+    }
+    const key = JSON.stringify([event.componentId, event.capability, event.attribute]);
+    const previous = this.eventAttributes.get(key);
+    const eventTime = typeof event.eventTime === 'number' && Number.isFinite(event.eventTime) &&
+      Math.abs(event.eventTime) <= 8640000000000000 ? event.eventTime : undefined;
+    const currentAttribute = (component.status as any)[event.capability]?.[event.attribute];
+    const currentTime = typeof currentAttribute?.timestamp === 'string' ? Date.parse(currentAttribute.timestamp) : NaN;
+    if (eventTime !== undefined && ((previous?.time !== undefined && previous.time > eventTime) ||
+      (Number.isFinite(currentTime) && currentTime > eventTime))) {
+      return false;
+    }
+    if (event.eventId) {
+      this.eventIds.add(event.eventId);
+      if (this.eventIds.size > 1024) {
+        this.eventIds.delete(this.eventIds.values().next().value!);
+      }
+    }
+    this.online = true;
+    this.failureCount = 0;
+    this.hasReceivedEvent = true;
+    if (event.capability !== 'button') {
+      const status = component.status as any;
+      status[event.capability] ||= {};
+      const value = { ...currentAttribute, value: event.value,
+        ...(event.unit ? { unit: event.unit } : {}), ...(event.data !== undefined ? { data: event.data } : {}),
+        ...(eventTime !== undefined ? { timestamp: new Date(eventTime).toISOString() } : {}) };
+      status[event.capability][event.attribute] = value;
+      this.eventAttributes.set(key, { revision: ++this.eventRevision, time: eventTime, value });
+    }
+    return this.dispatchEvent(event);
+  }
 
+  private dispatchEvent(event: ShortEvent): boolean {
+    // Observe actual synchronous HAP changes without replacing service methods.
+    let applied = false;
+    const onChange = () => {
+      applied = true;
+    };
+    const observed = this.accessory.services || [];
+    observed.forEach(service => service.on('characteristic-change', onChange));
+    try {
+      this.services.filter(s => s.componentId === event.componentId && s.capabilities.includes(event.capability))
+        .forEach(service => {
+          try {
+            service.processEvent(event);
+          } catch (error) {
+            this.log.warn(`Could not process ${event.capability}.${event.attribute} for ${this.name}: ${error}`);
+          }
+        });
+    } finally {
+      observed.forEach(service => service.removeListener('characteristic-change', onChange));
+    }
+    return applied;
+  }
+
+  /** Fetch and publish current state after reconnect; stateless button presses are never replayed. */
+  public async resyncState(): Promise<boolean> {
+    if (!await this.ensureOnline()) {
+      return false;
+    }
+    this.forceNextStatusRefresh();
+    if (!await this.refreshStatus()) {
+      return false;
+    }
+    this.components.forEach(component => Object.entries(component.status).forEach(([capability, attributes]) => {
+      if (capability === 'button' || !attributes || typeof attributes !== 'object') {
+        return;
+      }
+      Object.entries(attributes as Record<string, any>).forEach(([attribute, value]) => {
+        if ((component.status as any)[capability]?.[attribute] !== value) {
+          return; // A newer event replaced this attribute during snapshot dispatch.
+        }
+        const event: ShortEvent = { deviceId: this.id, componentId: component.componentId, capability, attribute,
+          value: value?.value, unit: value?.unit };
+        if (validEvent(event)) {
+          this.dispatchEvent(event);
+        }
+      });
+    }));
+    return true;
   }
 
 }

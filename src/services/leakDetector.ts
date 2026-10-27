@@ -2,7 +2,7 @@ import { PlatformAccessory } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 import { SensorService } from './sensorService';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class LeakDetectorService extends SensorService {
 

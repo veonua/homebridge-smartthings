@@ -2,7 +2,7 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class ThermostatService extends BaseService {
   targetHeatingCoolingState: CharacteristicValue;
@@ -45,23 +45,15 @@ export class ThermostatService extends BaseService {
 
     // set targets
 
-    this.getCurrentHeatingCoolingState().then((value) => this.targetHeatingCoolingState = value);
-    this.getCurrentTemperature().then((value) => this.targetTemperature = value as number);
+    void this.getCurrentHeatingCoolingState().then(value => {
+      this.targetHeatingCoolingState = value;
+    })
+      .catch(() => this.log.debug(`Initial thermostat mode unavailable for ${this.name}`));
+    void this.getCurrentTemperature().then(value => {
+      this.targetTemperature = value as number;
+    })
+      .catch(() => this.log.debug(`Initial thermostat temperature unavailable for ${this.name}`));
 
-    let pollSensors = 10; // default to 10 seconds
-    if (this.platform.config.PollSensorsSeconds !== undefined) {
-      pollSensors = this.platform.config.PollSensorsSeconds;
-    }
-
-    if (pollSensors > 0) {
-      multiServiceAccessory.startPollingState(pollSensors, this.getCurrentHeatingCoolingState.bind(this), this.service,
-        platform.Characteristic.CurrentHeatingCoolingState, platform.Characteristic.TargetHeatingCoolingState,
-        this.getTargetHeatingCoolingState.bind(this));
-
-      multiServiceAccessory.startPollingState(pollSensors, this.getCurrentTemperature.bind(this), this.service,
-        platform.Characteristic.CurrentTemperature,
-        platform.Characteristic.TargetTemperature, this.getTargetTemperature.bind(this));
-    }
   }
 
   // TARGET STATE CALLBACKS
@@ -108,48 +100,19 @@ export class ThermostatService extends BaseService {
   }
 
   // Set the target state of the thermostat
-  async setTargetHeatingCoolingState(value: CharacteristicValue) {
-    this.log.debug('Received setTargetHeatingCoolingState(' + value + ') event for ' + this.name);
-
-    if (!this.multiServiceAccessory.isOnline()) {
-      this.log.error(this.name + ' is offline');
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-
-    this.targetHeatingCoolingState = value;
-
-    if (this.capabilities.find((c) => c === 'thermostatMode') === undefined) {
-      this.log.debug(`Thermostat ${this.name} does not support thermostatMode.  Ignoring request`);
+  async setTargetHeatingCoolingState(value: CharacteristicValue): Promise<void> {
+    if (this.capabilities.find(c => c === 'thermostatMode') === undefined) {
+      this.targetHeatingCoolingState = value;
       return;
     }
-
-    let cmd = '';
+    let command = 'off';
     switch (value) {
-      case this.platform.Characteristic.TargetHeatingCoolingState.AUTO:
-        cmd = 'auto';
-        break;
-
-      case this.platform.Characteristic.TargetHeatingCoolingState.COOL:
-        cmd = 'cool';
-        break;
-
-      case this.platform.Characteristic.TargetHeatingCoolingState.HEAT:
-        cmd = 'heat';
-        break;
-
-      default:
-        cmd = 'off';
-        break;
+      case this.platform.Characteristic.TargetHeatingCoolingState.AUTO: command = 'auto'; break;
+      case this.platform.Characteristic.TargetHeatingCoolingState.COOL: command = 'cool'; break;
+      case this.platform.Characteristic.TargetHeatingCoolingState.HEAT: command = 'heat'; break;
     }
-
-    this.multiServiceAccessory.sendCommand('thermostatMode', cmd).then((success) => {
-      if (success) {
-        this.log.debug('setTargetHeatingCoolingState(' + value + ') SUCCESSFUL for ' + this.name);
-        //this.deviceStatus.timestamp = 0;  // Force a refresh next query.
-      } else {
-        this.log.error(`Command failed for ${this.name}`);
-      }
-    });
+    await this.sendCommandOrFail('thermostatMode', command);
+    this.targetHeatingCoolingState = value;
   }
 
   // CURRENT STATE
@@ -171,7 +134,7 @@ export class ThermostatService extends BaseService {
           let thermostatMode;
           try {
             thermostatMode = this.deviceStatus.status.thermostatMode.thermostatMode.value;
-          } catch (error) {
+          } catch {
             this.log.warn(`Missing thermostatMode from ${this.name}`);
             resolve(this.targetHeatingCoolingState);
             return;
@@ -252,24 +215,13 @@ export class ThermostatService extends BaseService {
     return temp;
   }
 
-  async setTargetTemperature(value: CharacteristicValue) {
-    this.log.debug('Received setTargetTemperature(' + value + ') event for ' + this.name);
+  async setTargetTemperature(value: CharacteristicValue): Promise<void> {
+    const cooling = this.targetHeatingCoolingState === this.platform.Characteristic.TargetHeatingCoolingState.COOL;
+    const capability = cooling ? 'thermostatCoolingSetpoint' : 'thermostatHeatingSetpoint';
+    const command = cooling ? 'setCoolingSetpoint' : 'setHeatingSetpoint';
+    const convertedTemp = this.units === 'F' ? (value as number * (9 / 5)) + 32 : value;
+    await this.sendCommandOrFail(capability, command, [convertedTemp]);
     this.targetTemperature = value as number;
-    let capability = '';
-    let command = '';
-
-    if (this.targetHeatingCoolingState === this.platform.Characteristic.TargetHeatingCoolingState.COOL) {
-      capability = 'thermostatCoolingSetpoint';
-      command = 'setCoolingSetpoint';
-    } else {
-      capability = 'thermostatHeatingSetpoint';
-      command = 'setHeatingSetpoint';
-    }
-
-    // If the thermostat's units is Farenheit, then we need to convert from celcius
-    const convertedTemp = this.units === 'F' ? (value as number * (9/5)) + 32 : value;
-
-    this.multiServiceAccessory.sendCommand(capability, command, [convertedTemp]);
   }
 
   // DISPLAY UNITS
@@ -290,13 +242,26 @@ export class ThermostatService extends BaseService {
 
   public processEvent(event: ShortEvent): void {
     this.log.debug(`Updating ${event.attribute} for ${this.name} from event to ${event.value}`);
-    let characteristic = this.platform.Characteristic.TargetTemperature;
-    let value: CharacteristicValue;
-
-    if (event.attribute === 'heatingSetpoint' || event.attribute === 'coolingSetpoint') {
-      value = this.units === 'F' ? (event.value - 32) * (5 / 9): event.value;
-    } else {
-      characteristic = this.platform.Characteristic.TargetHeatingCoolingState;
+    if (event.capability === 'temperatureMeasurement' && event.attribute === 'temperature') {
+      const unit = event.unit || this.deviceStatus.status.temperatureMeasurement?.temperature?.unit;
+      if ((unit === 'C' || unit === 'F') && typeof event.value === 'number') {
+        this.units = unit;
+        this.service.updateCharacteristic(this.platform.Characteristic.CurrentTemperature,
+          unit === 'F' ? (event.value - 32) * (5 / 9) : event.value);
+      }
+      return;
+    }
+    if ((event.capability === 'thermostatHeatingSetpoint' && event.attribute === 'heatingSetpoint') ||
+      (event.capability === 'thermostatCoolingSetpoint' && event.attribute === 'coolingSetpoint')) {
+      const cooling = this.targetHeatingCoolingState === this.platform.Characteristic.TargetHeatingCoolingState.COOL;
+      if ((event.capability === 'thermostatCoolingSetpoint') !== cooling) {
+        return;
+      }
+      const unit = event.unit || this.deviceStatus.status[event.capability]?.[event.attribute]?.unit ||
+        this.deviceStatus.status.temperatureMeasurement?.temperature?.unit;
+      this.publishTargetTemperature(event.value, unit);
+    } else if (event.capability === 'thermostatMode' && event.attribute === 'thermostatMode') {
+      let value: CharacteristicValue;
       switch (event.value) {
         case 'cool':
           value = this.platform.Characteristic.TargetHeatingCoolingState.COOL;
@@ -310,11 +275,31 @@ export class ThermostatService extends BaseService {
           value = this.platform.Characteristic.TargetHeatingCoolingState.AUTO;
           break;
 
-        default:
+        case 'off':
           value = this.platform.Characteristic.TargetHeatingCoolingState.OFF;
+          break;
+        default:
+          return;
       }
+      this.targetHeatingCoolingState = value;
+      this.service.updateCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState, value);
+      const cooling = value === this.platform.Characteristic.TargetHeatingCoolingState.COOL;
+      const capability = cooling ? 'thermostatCoolingSetpoint' : 'thermostatHeatingSetpoint';
+      const attribute = cooling ? 'coolingSetpoint' : 'heatingSetpoint';
+      const target = this.deviceStatus.status[capability]?.[attribute];
+      const unit = target?.unit || this.deviceStatus.status.temperatureMeasurement?.temperature?.unit;
+      this.publishTargetTemperature(target?.value, unit);
+    } else {
+      return;
     }
-    this.service.updateCharacteristic(characteristic, value);
+  }
+
+  private publishTargetTemperature(value: unknown, unit: unknown): void {
+    if ((unit !== 'F' && unit !== 'C') || typeof value !== 'number' || !Number.isFinite(value)) {
+      return;
+    }
+    this.targetTemperature = unit === 'F' ? (value - 32) * (5 / 9) : value;
+    this.service.updateCharacteristic(this.platform.Characteristic.TargetTemperature, this.targetTemperature);
   }
 
 }

@@ -2,10 +2,10 @@ import { PlatformAccessory } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 import { SensorService } from './sensorService';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class TemperatureService extends SensorService {
-  private unit = 'F';
+  private unit: string | undefined;
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
     multiServiceAccessory: MultiServiceAccessory,
@@ -21,6 +21,7 @@ export class TemperatureService extends SensorService {
           throw('Bad Value');
         }
       if (status.temperatureMeasurement.temperature.unit === 'F') {
+        this.unit = 'F';
         this.log.debug('Converting temp to celcius');
         return (status.temperatureMeasurement.temperature.value as number -  32) * (5/9) ; // Convert to Celcius
       } else {
@@ -31,9 +32,17 @@ export class TemperatureService extends SensorService {
   }
 
   public processEvent(event: ShortEvent): void {
+    if (event.capability !== 'temperatureMeasurement' || event.attribute !== 'temperature' || typeof event.value !== 'number') {
+      return;
+    }
+    const unit = event.unit || this.deviceStatus.status.temperatureMeasurement?.temperature?.unit || this.unit;
+    if (unit !== 'F' && unit !== 'C') {
+      return;
+    }
+    this.unit = unit;
     this.log.debug(`Event updating temperature measurement for ${this.name} to ${event.value}`);
     this.service.updateCharacteristic(
       this.platform.Characteristic.CurrentTemperature,
-      this.unit === 'F' ? (event.value as number - 32) * (5/9) : event.value as number);
+      unit === 'F' ? (event.value - 32) * (5/9) : event.value);
   }
 }

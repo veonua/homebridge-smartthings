@@ -2,7 +2,7 @@ import { PlatformAccessory, CharacteristicValue, Service } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 import { Command } from './smartThingsCommand';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 import { BaseService } from './baseService';
 
 enum AirConditionerMode {
@@ -72,18 +72,18 @@ export class AirConditionerService extends BaseService {
 
     // Since Homekit does not natively support air conditioners, we need to expose
     // a thermostat and a fan to cover temperature settings, fan speed, and swing.
-    this.thermostatService = this.setupThermostat(platform, multiServiceAccessory);
-    this.fanService = this.setupFan(platform, multiServiceAccessory);
+    this.thermostatService = this.setupThermostat(platform);
+    this.fanService = this.setupFan(platform);
 
     // Exposing this sensor is optional since some Samsung air conditioner always report 0 as relative humidity level
     // or the device might not support it
     if (this.isCapabilitySupported('relativeHumidityMeasurement') && this.platform.config.ExposeHumiditySensorForAirConditioners) {
-      this.humidityService = this.setupHumiditySensor(platform, multiServiceAccessory);
+      this.humidityService = this.setupHumiditySensor(platform);
     }
 
     // Check if the device supports controlling the light
     if (this.isCapabilitySupported('switchLevel')) {
-      this.lightService = this.setupLightSwitch(platform, multiServiceAccessory);
+      this.lightService = this.setupLightSwitch(platform);
     }
 
     // Optional mode switch is exposed only if the related capability is suppoorted
@@ -92,7 +92,7 @@ export class AirConditionerService extends BaseService {
 
       // Expose a switch for the optional mode.
       // If the selected optional mode is undefined or not supported, changes to the switch will have no effect.
-      this.optionalModeSwitchService = this.setupOptionalModeSwitch(platform, multiServiceAccessory);
+      this.optionalModeSwitchService = this.setupOptionalModeSwitch(platform);
     }
 
   }
@@ -101,7 +101,7 @@ export class AirConditionerService extends BaseService {
     return this.capabilities.find(c => c === capability) !== undefined;
   }
 
-  private setupThermostat(platform: IKHomeBridgeHomebridgePlatform, multiServiceAccessory: MultiServiceAccessory): Service {
+  private setupThermostat(platform: IKHomeBridgeHomebridgePlatform): Service {
     this.log.info(`Expose Thermostat for ${this.name}`);
 
     // add thermostat service
@@ -124,19 +124,10 @@ export class AirConditionerService extends BaseService {
     this.service.getCharacteristic(platform.Characteristic.TemperatureDisplayUnits)
       .onGet(this.getTemperatureDisplayUnits.bind(this));
 
-    multiServiceAccessory.startPollingState(this.platform.config.PollSensorsSeconds, this.getCurrentHeatingCoolingState.bind(this),
-      this.service,
-      platform.Characteristic.CurrentHeatingCoolingState, platform.Characteristic.TargetHeatingCoolingState,
-      this.getTargetHeatingCoolingState.bind(this));
-
-    multiServiceAccessory.startPollingState(this.platform.config.PollSensorsSeconds, this.getCurrentTemperature.bind(this), this.service,
-      platform.Characteristic.CurrentTemperature, platform.Characteristic.TargetTemperature,
-      this.getTargetTemperature.bind(this));
-
     return this.service;
   }
 
-  private setupFan(platform: IKHomeBridgeHomebridgePlatform, multiServiceAccessory: MultiServiceAccessory): Service {
+  private setupFan(platform: IKHomeBridgeHomebridgePlatform): Service {
     this.log.info(`Expose Fan for ${this.name}`);
 
     this.setServiceType(platform.Service.Fanv2);
@@ -155,41 +146,29 @@ export class AirConditionerService extends BaseService {
       .onSet(this.setFanLevel.bind(this))
       .onGet(this.getFanLevel.bind(this));
 
-    multiServiceAccessory.startPollingState(this.platform.config.PollSensorsSeconds,
-      this.getSwitchState.bind(this), this.service, platform.Characteristic.Active);
-
-    multiServiceAccessory.startPollingState(this.platform.config.PollSensorsSeconds,
-      this.getFanLevel.bind(this), this.service, platform.Characteristic.RotationSpeed);
-
     return this.service;
   }
 
-  private setupOptionalModeSwitch(platform: IKHomeBridgeHomebridgePlatform, multiServiceAccessory: MultiServiceAccessory): Service {
+  private setupOptionalModeSwitch(platform: IKHomeBridgeHomebridgePlatform): Service {
     this.setServiceType(platform.Service.Switch);
 
     this.service.getCharacteristic(platform.Characteristic.On)
       .onGet(this.getOptionalModeSwitchState.bind(this))
       .onSet(this.setOptionalModeSwitchState.bind(this));
 
-    multiServiceAccessory.startPollingState(this.platform.config.PollSensorsSeconds,
-      this.getOptionalModeSwitchState.bind(this), this.service, platform.Characteristic.On);
-
     return this.service;
   }
 
-  private setupHumiditySensor(platform: IKHomeBridgeHomebridgePlatform, multiServiceAccessory: MultiServiceAccessory): Service {
+  private setupHumiditySensor(platform: IKHomeBridgeHomebridgePlatform): Service {
     this.setServiceType(platform.Service.HumiditySensor);
 
     this.service.getCharacteristic(platform.Characteristic.CurrentRelativeHumidity)
       .onGet(this.getHumidityLevel.bind(this));
 
-    multiServiceAccessory.startPollingState(this.platform.config.PollSensorsSeconds, this.getHumidityLevel.bind(this), this.service,
-      platform.Characteristic.CurrentRelativeHumidity);
-
     return this.service;
   }
 
-  private setupLightSwitch(platform: IKHomeBridgeHomebridgePlatform, multiServiceAccessory: MultiServiceAccessory): Service {
+  private setupLightSwitch(platform: IKHomeBridgeHomebridgePlatform): Service {
     this.log.info(`Expose Light Switch for ${this.name}`);
 
     this.setServiceType(platform.Service.Lightbulb); // Use Lightbulb service to control light intensity
@@ -201,9 +180,6 @@ export class AirConditionerService extends BaseService {
     this.service.getCharacteristic(platform.Characteristic.Brightness)
       .onGet(this.getLightBrightness.bind(this))
       .onSet(this.setLightBrightness.bind(this));
-
-    multiServiceAccessory.startPollingState(this.platform.config.PollSensorsSeconds, this.getLightSwitchState.bind(this), this.service,
-      platform.Characteristic.On);
 
     return this.service;
   }
@@ -267,7 +243,7 @@ export class AirConditionerService extends BaseService {
   private async setLightSwitchState(value: CharacteristicValue): Promise<void> {
     const level = value ? 100 : 0; // 100 for on, 0 for off
     this.log.info(`[${this.name}] set light switch state to ${value}`);
-    this.sendCommandsOrFail([new Command('switchLevel', 'setLevel', [level])]);
+    await this.sendCommandsOrFail([new Command('switchLevel', 'setLevel', [level])]);
   }
 
   private async getLightBrightness(): Promise<CharacteristicValue> {
@@ -277,7 +253,7 @@ export class AirConditionerService extends BaseService {
 
   private async setLightBrightness(value: CharacteristicValue): Promise<void> {
     this.log.info(`[${this.name}] set light brightness to ${value}`);
-    this.sendCommandsOrFail([new Command('switchLevel', 'setLevel', [value])]);
+    await this.sendCommandsOrFail([new Command('switchLevel', 'setLevel', [value])]);
   }
 
   private async setOptionalModeSwitchState(value: CharacteristicValue): Promise<void> {
@@ -287,7 +263,7 @@ export class AirConditionerService extends BaseService {
     }
     const mode = value ? this.optionalMode : OptionalMode.Off;
     this.log.info(`[${this.name}] set airConditionerOptionalMode to ${mode}`);
-    this.sendCommandsOrFail([new Command('custom.airConditionerOptionalMode', 'setAcOptionalMode', [mode])]);
+    await this.sendCommandsOrFail([new Command('custom.airConditionerOptionalMode', 'setAcOptionalMode', [mode])]);
   }
 
   private async getOptionalModeSwitchState(): Promise<CharacteristicValue> {
@@ -517,15 +493,19 @@ export class AirConditionerService extends BaseService {
   }
 
   private async sendCommandsOrFail(commands: Command[]) {
-    if (!this.multiServiceAccessory.isOnline()) {
+    if (!await this.multiServiceAccessory.ensureOnline()) {
       this.log.error(this.name + ' is offline');
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
 
-    if (!await this.multiServiceAccessory.sendCommands(commands)) {
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    try {
+      if (await this.multiServiceAccessory.sendCommands(commands, this.componentId)) {
+        return;
+      }
+    } catch {
+      // Transport errors must be reported to HomeKit as communication failures.
     }
-
+    throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   }
 
   private async getDeviceStatus(): Promise<Record<string, any>> {
@@ -545,10 +525,26 @@ export class AirConditionerService extends BaseService {
     let fanOscillationMode: FanOscillationMode;
 
     switch (event.capability) {
+      case 'temperatureMeasurement': {
+        const unit = event.unit || this.deviceStatus.status.temperatureMeasurement?.temperature?.unit;
+        if (event.attribute === 'temperature' && typeof event.value === 'number' && (unit === 'C' || unit === 'F')) {
+          this.temperatureUnit = unit as TemperatureUnit;
+          this.thermostatService.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, this.toCelsius(event.value));
+        }
+        break;
+      }
       case 'thermostatCoolingSetpoint':
+        {
+        const unit = event.unit || this.deviceStatus.status.thermostatCoolingSetpoint?.coolingSetpoint?.unit ||
+          this.deviceStatus.status.temperatureMeasurement?.temperature?.unit;
+        if (unit !== 'C' && unit !== 'F') {
+          break;
+        }
+        this.temperatureUnit = unit as TemperatureUnit;
         temperature = this.toCelsius(event.value);
         this.thermostatService.updateCharacteristic(this.platform.Characteristic.TargetTemperature, temperature);
         break;
+        }
       case 'airConditionerMode':
       case 'thermostatMode':
         targetHeatingCoolingState = this.modeToTargetHeatingCoolingState(event.value);

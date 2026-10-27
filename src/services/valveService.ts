@@ -2,7 +2,7 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class ValveService extends BaseService {
 
@@ -41,23 +41,10 @@ export class ValveService extends BaseService {
   }
 
   // Set the target state of the valve
-  async setValveState(value: CharacteristicValue) {
-    this.log.debug('Received setValveState(' + value + ') event for ' + this.name);
-
-    if (!this.multiServiceAccessory.isOnline()) {
-      this.log.error(this.name + ' is offline');
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
+  async setValveState(value: CharacteristicValue): Promise<void> {
     const command = value === this.platform.Characteristic.Active.ACTIVE ? 'open' : 'close';
-    this.multiServiceAccessory.sendCommand('valve', command).then((success) => {
-      if (success) {
-        this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-        this.multiServiceAccessory.forceNextStatusRefresh();
-        // this.deviceStatus.timestamp = 0; // Force refresh
-      } else {
-        this.log.error(`Command failed for ${this.name}`);
-      }
-    });
+    await this.sendCommandOrFail('valve', command);
+    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   public processEvent(event: ShortEvent): void {

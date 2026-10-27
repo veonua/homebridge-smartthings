@@ -9,7 +9,6 @@ export abstract class SensorService extends BaseService {
     return null;
   };
 
-  pollingTimer: NodeJS.Timeout | void | undefined;
 
   characteristic: WithUUID<new () => Characteristic> | undefined;
 
@@ -29,15 +28,6 @@ export abstract class SensorService extends BaseService {
     this.service.getCharacteristic(sensorCharacteristic)
       .onGet(this.getSensorState.bind(this));
 
-    let pollSensorsSeconds = 10; // default to 10 seconds
-    if (this.platform.config.PollSensorsSeconds !== undefined) {
-      pollSensorsSeconds = this.platform.config.PollSensorsSeconds;
-    }
-
-    if (pollSensorsSeconds > 0) {
-      this.pollingTimer = this.multiServiceAccessory.startPollingState(pollSensorsSeconds, this.getSensorState.bind(this), this.service,
-        sensorCharacteristic);
-    }
 
   }
 
@@ -57,18 +47,9 @@ export abstract class SensorService extends BaseService {
             this.log.debug(`State for ${this.name}: ${value}`);
             resolve(value);
             return;
-          } catch (error) {
+          } catch {
             this.statusFailureCount++;
-            if (this.statusFailureCount > 5) {
-              this.log.error(`Bad status from ${this.name}.  Removing this service.`);
-              // Stop polling and remove service
-              if (this.pollingTimer) {
-                clearInterval(this.pollingTimer);
-              }
-              this.accessory.removeService(this.service);
-            } else {
-              this.log.warn(`Bad status from ${this.name}.  Ignoring for now.`);
-            }
+            this.log.warn(`Bad status from ${this.name}.  Keeping the service available for recovery.`);
             reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.INVALID_VALUE_IN_REQUEST));
             return;
           }

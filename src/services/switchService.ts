@@ -2,7 +2,7 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class SwitchService extends BaseService {
 
@@ -18,34 +18,13 @@ export class SwitchService extends BaseService {
       .onGet(this.getSwitchState.bind(this))
       .onSet(this.setSwitchState.bind(this));
 
-    let pollSwitchesAndLightsSeconds = 10; // default to 10 seconds
-    if (this.platform.config.PollSwitchesAndLightsSeconds !== undefined) {
-      pollSwitchesAndLightsSeconds = this.platform.config.PollSwitchesAndLightsSeconds;
-    }
-
-    if (pollSwitchesAndLightsSeconds > 0) {
-      multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getSwitchState.bind(this), this.service,
-        platform.Characteristic.On);
-    }
   }
 
   // Set the target state of the lock
-  async setSwitchState(value: CharacteristicValue) {
+  async setSwitchState(value: CharacteristicValue): Promise<void> {
     this.log.debug('Received setSwitchState(' + value + ') event for ' + this.name);
-
-    if (!this.multiServiceAccessory.isOnline()) {
-      this.log.error(this.name + ' is offline');
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-    this.multiServiceAccessory.sendCommand('switch', value ? 'on' : 'off').then((success) => {
-      if (success) {
-        this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-        this.multiServiceAccessory.forceNextStatusRefresh();
-        // this.deviceStatus.timestamp = 0;  // Force a refresh next query.
-      } else {
-        this.log.error(`Command failed for ${this.name}`);
-      }
-    });
+    await this.sendCommandOrFail('switch', value ? 'on' : 'off');
+    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   // Get the current state of the lock
@@ -60,7 +39,7 @@ export class SwitchService extends BaseService {
           let switchState;
           try {
             switchState = this.deviceStatus.status.switch.switch.value;
-          } catch(error) {
+          } catch {
             this.log.error(`Missing switch status from ${this.name}`);
           }
           this.log.debug(`Switch value from ${this.name}: ${switchState}`);

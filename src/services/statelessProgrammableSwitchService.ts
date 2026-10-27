@@ -2,7 +2,7 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class StatelessProgrammableSwitchService extends BaseService {
 
@@ -14,18 +14,6 @@ export class StatelessProgrammableSwitchService extends BaseService {
     this.setServiceType(platform.Service.StatelessProgrammableSwitch);
     // Set the event handlers
     this.log.debug(`Adding StatelessProgrammableSwitchService to ${this.name}`);
-    this.service.getCharacteristic(platform.Characteristic.ProgrammableSwitchEvent)
-      .onGet(this.getSwitchState.bind(this));
-
-    let pollSwitchesAndLightsSeconds = 10; // default to 10 seconds
-    if (this.platform.config.PollSwitchesAndLightsSeconds !== undefined) {
-      pollSwitchesAndLightsSeconds = this.platform.config.PollSwitchesAndLightsSeconds;
-    }
-
-    if (pollSwitchesAndLightsSeconds > 0) {
-      multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getSwitchState.bind(this), this.service,
-        platform.Characteristic.ProgrammableSwitchEvent);
-    }
   }
 
   // Set the target state of the lock
@@ -46,38 +34,8 @@ export class StatelessProgrammableSwitchService extends BaseService {
   //   });
   // }
 
-  // Get the current state of the lock
-  async getSwitchState(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    this.log.debug('Received getSwitchState() event for ' + this.name);
-
-    return new Promise((resolve, reject) => {
-      this.getStatus().then(success => {
-        if (success) {
-          const buttonState = this.deviceStatus.status.button.button.value as string | null;
-          if (buttonState === null) {
-            this.log.debug(`No button for ${this.name}`);
-            resolve;
-            return;
-          }
-          this.log.debug(`Button value from ${this.name}: ${buttonState}`);
-          const characteristicValue = this.mapValue(buttonState);
-          if (characteristicValue) {
-            resolve(characteristicValue);
-          } else {
-            resolve;
-          }
-          
-        } else {
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
-  }
-
   public processEvent(event: ShortEvent): void {
-    if (event.capability === 'button') {
+    if (event.capability === 'button' && event.attribute === 'button' && typeof event.value === 'string') {
       this.log.debug(`Event updating button capability for ${this.name} to ${event.value}`);
       const characteristicValue = this.mapValue(event.value);
       if (characteristicValue !== undefined) {

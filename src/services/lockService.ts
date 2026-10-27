@@ -2,7 +2,7 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class LockService extends BaseService {
   private targetState = 0;
@@ -34,16 +34,6 @@ export class LockService extends BaseService {
       this.targetState = platform.Characteristic.LockTargetState.SECURED;
     });
 
-    let pollLocksSeconds = 10; // default to 10 seconds
-    if (this.platform.config.PollLocksSeconds !== undefined) {
-      pollLocksSeconds = this.platform.config.PollSensorsSeconds;
-    }
-
-    if (pollLocksSeconds > 0) {
-      multiServiceAccessory.startPollingState(pollLocksSeconds, this.getLockCurrentState.bind(this), this.service,
-        platform.Characteristic.LockCurrentState,
-        this.platform.Characteristic.LockTargetState, this.getLockTargetState.bind(this));
-    }
   }
 
   // Return the current target state
@@ -71,28 +61,13 @@ export class LockService extends BaseService {
   }
 
   // Set the target state of the lock
-  async setLockTargetState(value: CharacteristicValue) {
-    this.log.debug('Received setTargetState(' + value + ') event for ' + this.name);
-
+  async setLockTargetState(value: CharacteristicValue): Promise<void> {
+    await this.sendCommandOrFail('lock', value ? 'lock' : 'unlock');
     this.targetState = value as number;
-
-    if (!this.multiServiceAccessory.isOnline()) {
-      this.log.error(this.name + ' is offline');
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
     this.lockInTransitionStart = Date.now();
     this.service.updateCharacteristic(this.platform.Characteristic.LockTargetState, value);
-    this.multiServiceAccessory.sendCommand('lock', value ? 'lock' : 'unlock').then((success) => {
-      if (success) {
-        this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-        this.multiServiceAccessory.forceNextStatusRefresh();
-        // this.deviceStatus.timestamp = 0; // Force refresh
-      } else {
-        this.log.error(`Command failed for ${this.name}`);
-      }
-    });
+    this.multiServiceAccessory.forceNextStatusRefresh();
   }
-
 
   // Get the current state of the lock
   async getLockCurrentState(): Promise<CharacteristicValue> {

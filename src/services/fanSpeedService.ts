@@ -2,7 +2,7 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class FanSpeedService extends BaseService {
 
@@ -22,34 +22,12 @@ export class FanSpeedService extends BaseService {
       .onSet(this.setLevel.bind(this))
       .onGet(this.getLevel.bind(this));
 
-    let pollSwitchesAndLightsSeconds = 10; // default to 10 seconds
-    if (this.platform.config.PollSwitchesAndLightsSeconds !== undefined) {
-      pollSwitchesAndLightsSeconds = this.platform.config.PollSwitchesAndLightsSeconds;
-    }
-
-    if (pollSwitchesAndLightsSeconds > 0) {
-      multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getSwitchState.bind(this), this.service,
-        platform.Characteristic.On);
-      multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getLevel.bind(this), this.service,
-        platform.Characteristic.RotationSpeed);
-    }
   }
 
   // Set the target
-  async setSwitchState(value: CharacteristicValue) {
+  async setSwitchState(value: CharacteristicValue): Promise<void> {
     this.log.debug('Received setSwitchState(' + value + ') event for ' + this.name);
-
-    if (!this.multiServiceAccessory.isOnline()) {
-      this.log.error(this.name + ' is offline');
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-    this.multiServiceAccessory.sendCommand('switch', value ? 'on' : 'off').then((success) => {
-      if (success) {
-        this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-      } else {
-        this.log.error(`Command failed for ${this.name}`);
-      }
-    });
+    await this.sendCommandOrFail('switch', value ? 'on' : 'off');
   }
 
   // Get the current state of the lock
@@ -72,50 +50,16 @@ export class FanSpeedService extends BaseService {
   }
 
   async setLevel(value: CharacteristicValue): Promise<void> {
-    this.log.debug('Received setLevel(' + value + ') event for ' + this.name);
-
-    return new Promise<void>((resolve, reject) => {
-      if (!this.multiServiceAccessory.isOnline()) {
-        this.log.error(this.accessory.context.device.label + ' is offline');
-        return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-      }
-
-      let level = 0;
-
-      // Level is 0 (off), 1 (low), 2 (medium), 3 (high)
-      if (value === 0) {
-        level = 0;
-      } else if (value as number <= 33) {
-        level = 1;
-      } else if (value as number  <= 66) {
-        level = 2;
-      } else {
-        level = 3;
-      }
-
-      this.log.debug(`Setting value of ${this.name} to ${level}`);
-      this.multiServiceAccessory.sendCommand('fanSpeed', 'setFanSpeed', [level]).then(success => {
-        if (success) {
-          this.log.debug('setLevel(' + value + ') SUCCESSFUL for ' + this.name);
-          this.multiServiceAccessory.forceNextStatusRefresh();
-          // this.deviceStatus.timestamp = 0;
-          resolve();
-        } else {
-          this.log.error(`Failed to send setLevel command for ${this.name}`);
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    const level = value === 0 ? 0 : value as number <= 33 ? 1 : value as number <= 66 ? 2 : 3;
+    await this.sendCommandOrFail('fanSpeed', 'setFanSpeed', [level]);
+    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   async getLevel(): Promise<CharacteristicValue> {
     this.log.debug('Received getLevel() event for ' + this.name);
     let level = 0;
     return new Promise<CharacteristicValue>((resolve, reject) => {
-      if (!this.multiServiceAccessory.isOnline()) {
-        this.log.error(this.accessory.context.device.label + ' is offline');
-        return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-      }
+
 
       this.getStatus().then((success) => {
         if (!success) {

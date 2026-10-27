@@ -2,7 +2,7 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class LightService extends BaseService {
 
@@ -58,40 +58,18 @@ export class LightService extends BaseService {
         .onGet(this.getSaturation.bind(this));
 
       // Get current color setting.  Sets currentColor values to start
-      this.getHue();
-      this.getSaturation();
+      void this.getHue().catch(() => this.log.debug(`Initial hue unavailable for ${this.name}`));
+      void this.getSaturation().catch(() => this.log.debug(`Initial saturation unavailable for ${this.name}`));
     }
 
-    let pollSwitchesAndLightsSeconds = 10; // default to 10 seconds
-    if (this.platform.config.PollSwitchesAndLightsSeconds !== undefined) {
-      pollSwitchesAndLightsSeconds = this.platform.config.PollSwitchesAndLightsSeconds;
-    }
-
-    if (pollSwitchesAndLightsSeconds > 0) {
-      multiServiceAccessory.startPollingState(pollSwitchesAndLightsSeconds, this.getSwitchState.bind(this), this.service,
-        platform.Characteristic.On);
-    }
   }
 
 
-  async setSwitchState(value: CharacteristicValue) {
+  async setSwitchState(value: CharacteristicValue): Promise<void> {
     this.log.debug('Received setSwitchState(' + value + ') event for ' + this.name);
-
-    if (!this.multiServiceAccessory.isOnline()) {
-      this.log.error(this.name + ' is offline');
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-    this.multiServiceAccessory.sendCommand('switch', value ? 'on' : 'off').then((success) => {
-      if (success) {
-        this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-        this.multiServiceAccessory.forceNextStatusRefresh();
-        // this.deviceStatus.timestamp = 0;
-      } else {
-        this.log.error(`Command failed for ${this.name}`);
-      }
-    });
+    await this.sendCommandOrFail('switch', value ? 'on' : 'off');
+    this.multiServiceAccessory.forceNextStatusRefresh();
   }
-
 
   async getSwitchState(): Promise<CharacteristicValue> {
     // if you need to return an error to show the device as "Not Responding" in the Home app:
@@ -112,26 +90,8 @@ export class LightService extends BaseService {
   }
 
   async setLevel(value: CharacteristicValue): Promise<void> {
-    this.log.debug('Received setLevel(' + value + ') event for ' + this.name);
-
-    return new Promise<void>((resolve, reject) => {
-      if (!this.multiServiceAccessory.isOnline()) {
-        this.log.error(this.accessory.context.device.label + ' is offline');
-        return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-      }
-
-      this.multiServiceAccessory.sendCommand('switchLevel', 'setLevel', [value]).then(success => {
-        if (success) {
-          this.log.debug('setLevel(' + value + ') SUCCESSFUL for ' + this.name);
-          this.multiServiceAccessory.forceNextStatusRefresh();
-          // this.deviceStatus.timestamp = 0;
-          resolve();
-        } else {
-          this.log.error(`Failed to send setLevel command for ${this.name}`);
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    await this.sendCommandOrFail('switchLevel', 'setLevel', [value]);
+    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   async getLevel(): Promise<CharacteristicValue> {
@@ -139,10 +99,7 @@ export class LightService extends BaseService {
     let level = 0;
 
     return new Promise<CharacteristicValue>((resolve, reject) => {
-      if (!this.multiServiceAccessory.isOnline()) {
-        this.log.error(this.accessory.context.device.label + ' is offline');
-        return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-      }
+
       this.getStatus().then((success) => {
         if (!success) {
           this.log.error(`Could not get device status for ${this.name}`);
@@ -167,19 +124,8 @@ export class LightService extends BaseService {
   }
 
   async setColorTemp(value: CharacteristicValue): Promise<void> {
-    this.log.debug(`Set Color Temperature received with value ${value}`);
-
-    return new Promise((resolve, reject) => {
-      if (!this.multiServiceAccessory.isOnline()) {
-        this.log.error(this.accessory.context.device.label + ' is offline');
-        return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-      }
-      const stValue = 6500 - Math.round((value as number - 140) / 360 * 6500) + 1;
-      this.log.debug(`Sending converted temperature value of ${stValue} to ${this.name}`);
-      this.multiServiceAccessory.sendCommand('colorTemperature', 'setColorTemperature', [stValue])
-        .then(() => resolve())
-        .catch((value) => reject(value));
-    });
+    const stValue = 6500 - Math.round((value as number - 140) / 360 * 6500) + 1;
+    await this.sendCommandOrFail('colorTemperature', 'setColorTemperature', [stValue]);
   }
 
   async getColorTemp(): Promise<CharacteristicValue> {
@@ -209,52 +155,19 @@ export class LightService extends BaseService {
     });
   }
 
-  //
-  // If we get an error setting individual hue or saturation, then use setColor to set both at once.  Needed to fix #96
-  //
-  async setColor(hue: number, saturation: number): Promise<boolean> {
-    this.log.debug(`setColor called with hue: ${hue}, saturation: ${saturation}}`);
-    return new Promise((resolve) => {
-      this.multiServiceAccessory.sendCommand('colorControl', 'setColor', [{
-        hue: this.currentColor.hue,
-        saturation: this.currentColor.saturation,
-      }])
-        .then((success) => resolve(success));
-    });
+  async setColor(hue: number, saturation: number): Promise<void> {
+    await this.sendCommandOrFail('colorControl', 'setColor', [{ hue, saturation }]);
   }
 
   async setHue(value: CharacteristicValue): Promise<void> {
-    this.log.debug(`setHue called with value ${value}`);
     const huePct = Math.round((value as number / 360) * 100);
+    const saturation = this.currentColor.saturation;
+    if (this.requireSetColor) {
+      await this.setColor(huePct, saturation);
+    } else {
+      await this.sendCommandOrFail('colorControl', 'setHue', [huePct]);
+    }
     this.currentColor.hue = huePct;
-    this.log.debug(`Hue arc value of ${value} converted to Hue Percent of ${huePct}`);
-    return new Promise((resolve, reject) => {
-
-      if (this.requireSetColor) {   // Issue #96
-        this.setColor(this.currentColor.hue, this.currentColor.saturation)
-          .then(() => resolve())
-          .catch((value) => reject(value));
-
-      } else {
-        this.multiServiceAccessory.sendCommand('colorControl', 'setHue', [huePct])
-          .then((success) => {
-            if (success) {
-              resolve();
-            } else {
-              this.log.warn(`Received ${value} setting hue for ${this.name}, will try setting color`);
-              this.requireSetColor = true;
-              this.setColor(this.currentColor.hue, this.currentColor.saturation).then((success) => {
-                if (!success) {
-                  reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-                } else {
-                  resolve();
-                }
-              });
-            }
-          });
-      }
-
-    });
   }
 
   async getHue(): Promise<CharacteristicValue> {
@@ -284,61 +197,24 @@ export class LightService extends BaseService {
   }
 
   async setSaturation(value: CharacteristicValue): Promise<void> {
-    this.log.debug(`setSaturation called with value ${value}`);
-    this.currentColor.saturation = value as number;
-    return new Promise((resolve, reject) => {
-
-      if (this.requireSetColor) {
-        this.setColor(this.currentColor.hue, this.currentColor.saturation)
-          .then(() => resolve())
-          .catch((value) => reject(value));
-      } else {
-
-        this.multiServiceAccessory.sendCommand('colorControl', 'setSaturation', [value])
-          .then((success) => {
-            if (success) {
-              resolve();
-            } else {
-              this.log.warn(`Received ${value} setting saturation for ${this.name}, will try setting color`);
-              this.requireSetColor = true;
-              this.setColor(this.currentColor.hue, this.currentColor.saturation).then(success => {
-                if (success) {
-                  resolve();
-                } else {
-                  reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-                }
-              });
-            }
-          });
-      }
-    });
+    const saturation = value as number;
+    if (this.requireSetColor) {
+      await this.setColor(this.currentColor.hue, saturation);
+    } else {
+      await this.sendCommandOrFail('colorControl', 'setSaturation', [saturation]);
+    }
+    this.currentColor.saturation = saturation;
   }
 
   async getSaturation(): Promise<CharacteristicValue> {
-    return new Promise((resolve, reject) => {
-      this.getStatus().then((success) => {
-        if (!success) {
-          this.log.error(`Could not get device status for ${this.name}`);
-          return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-
-        if (this.deviceStatus.status.colorControl.saturation.value !== undefined) {
-          const satPct = this.deviceStatus.status.colorControl.saturation.value;
-          this.currentColor.saturation = satPct;
-          this.log.debug('getSaturation() SUCCESSFUL for ' + this.name + '. value = ' + satPct);
-          // Convert saturation from percent to degrees
-          resolve(satPct);
-
-        } else {
-          this.log.error('getSaturation() FAILED for ' + this.name + '. Undefined value');
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-
-      }).catch(() => {
-        this.log.error('getSaturation() FAILED for ' + this.name + '. Comm error.');
-        reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-      });
-    });
+    const success = await this.getStatus();
+    const saturation = success ? this.deviceStatus.status?.colorControl?.saturation?.value : undefined;
+    if (typeof saturation !== 'number' || !Number.isFinite(saturation) || saturation < 0 || saturation > 100) {
+      this.log.debug(`Saturation unavailable or invalid for ${this.name}`);
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+    this.currentColor.saturation = saturation;
+    return saturation;
   }
 
   public processEvent(event: ShortEvent): void {
@@ -357,7 +233,7 @@ export class LightService extends BaseService {
 
       case 'colorTemperature': {
         this.log.debug(`Event updating colorTemperature capability for ${this.name} to ${event.value}`);
-        const stTemperature = Math.min(this.deviceStatus.status.colorTemperature.colorTemperature.value, 6500);
+        const stTemperature = Math.min(event.value, 6500);
         this.log.debug('getColorTemperature() SUCCESSFUL for ' + this.name + '. value = ' + stTemperature);
         // Convert number to the homebridge compatible value
         const hbTemperature = 500 - ((stTemperature / 6500) * 360);
@@ -371,7 +247,10 @@ export class LightService extends BaseService {
           const hueArc = Math.round((event.value / 100) * 360);
           this.service.updateCharacteristic(this.platform.Characteristic.Hue, hueArc);
         } else if (event.attribute === 'saturation') {
-          this.service.updateCharacteristic(this.platform.Characteristic.Saturation, event.value);
+          if (typeof event.value === 'number' && Number.isFinite(event.value) && event.value >= 0 && event.value <= 100) {
+            this.currentColor.saturation = event.value;
+            this.service.updateCharacteristic(this.platform.Characteristic.Saturation, event.value);
+          }
         }
       }
 

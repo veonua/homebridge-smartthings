@@ -1,5 +1,5 @@
 import { PlatformAccessory, Logger, Service, WithUUID } from 'homebridge';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 //import { BasePlatformAccessory } from '../basePlatformAccessory';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
@@ -36,7 +36,7 @@ export class BaseService {
 
   protected findCapability(capabilityToFind: string): boolean {
     let component;
-    component = this.accessory.context.device.components.find(c => c.id === 'main');
+    component = this.accessory.context.device.components.find(c => c.id === this.componentId);
     if (component === undefined) {
       component = this.accessory.context.device.components[0];
     }
@@ -57,17 +57,27 @@ export class BaseService {
     this.service.setCharacteristic(this.platform.Characteristic.Name, this.accessory.context.device.label);
   }
 
+  protected async sendCommandOrFail(capability: string, command: string, args?: unknown[]): Promise<void> {
+    if (await this.multiServiceAccessory.ensureOnline()) {
+      try {
+        if (await this.multiServiceAccessory.sendCommand(capability, command, args, this.componentId)) {
+          return;
+        }
+      } catch {
+        // A rejected or uncertain command must be reported to HomeKit.
+      }
+    }
+    this.log.error(`Command failed for ${this.name}`);
+    throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+  }
+
   protected async getStatus(): Promise<boolean> {
     // if you need to return an error to show the device as "Not Responding" in the Home app:
     // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     // this.log.debug('Received getMotion() event for ' + this.name);
 
     return new Promise((resolve) => {
-      if (!this.multiServiceAccessory.isOnline()) {
-        this.log.info(`${this.name} is offline`);
-        resolve(false);
-      }
-      this.multiServiceAccessory.refreshStatus()
+      this.multiServiceAccessory.ensureOnline().then(online => online && this.multiServiceAccessory.refreshStatus())
         .then(success => {
           if (!success) {
             resolve(false);

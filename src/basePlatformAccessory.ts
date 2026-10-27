@@ -1,7 +1,7 @@
 import { PlatformAccessory, Logger, API, Characteristic, CharacteristicValue, Service, WithUUID } from 'homebridge';
 import axios = require('axios');
 import { IKHomeBridgeHomebridgePlatform } from './platform';
-import { ShortEvent } from './webhook/subscriptionHandler';
+import { ShortEvent } from './shortEvent';
 
 interface DeviceStatus {
   timestamp: number;
@@ -59,7 +59,7 @@ export abstract class BasePlatformAccessory {
     this.api = platform.api;
     const headerDict = { 'Authorization': 'Bearer: ' + this.key };
 
-    this.axInstance = axios.default.create({
+    this.axInstance = axios.create({
       baseURL: this.baseURL,
       headers: headerDict,
     });
@@ -142,57 +142,11 @@ export abstract class BasePlatformAccessory {
     }
   }
 
+  /** Retained for subclasses built against earlier versions; periodic state polling is disabled. */
   protected startPollingState(pollSeconds: number, getValue: () => Promise<CharacteristicValue>, service: Service,
-    chracteristic: WithUUID<new () => Characteristic>, targetStateCharacteristic?: WithUUID<new () => Characteristic>,
+    characteristic: WithUUID<new () => Characteristic>, targetStateCharacteristic?: WithUUID<new () => Characteristic>,
     getTargetState?: () => Promise<CharacteristicValue>): NodeJS.Timeout | void {
-
-    if (this.platform.config.SmartClientId && this.platform.config.SmartClientId !== '') {
-      this.log.debug('Not polling because SmartApp is set.');
-      return;  // Don't poll if we have a Smart App
-    }
-
-    if (this.platform.config.WebhookToken && this.platform.config.WebhookToken !== '') {
-      return;  // Don't poll if we have a webhook token
-    }
-
-    if (pollSeconds > 0) {
-      return setInterval(() => {
-        // If we are in the middle of a commmand call, or it hasn't been at least 10 seconds, we don't want to poll.
-        if (this.commandInProgress || Date.now() - this.lastCommandCompleted < 20 * 1000) {
-          // Skip polling until command is complete
-          this.log.debug(`Command in progress, skipping polling for ${this.name}`);
-          return;
-        }
-        if (this.online) {
-          this.log.debug(`${this.name} polling...`);
-          // this.commandInProgress = true;
-          getValue().then((v) => {
-            service.updateCharacteristic(chracteristic, v);
-            this.log.debug(`${this.name} value updated.`);
-          }).catch(() => {  // If we get an error, ignore
-            this.log.warn(`Poll failure on ${this.name}`);
-            return;
-          });
-          // Update target if we have to
-          if (targetStateCharacteristic && getTargetState) {
-            //service.updateCharacteristic(targetStateCharacteristic, getTargetState());
-            getTargetState().then(value => service.updateCharacteristic(targetStateCharacteristic, value));
-          }
-        } else {
-          // If we failed this accessory due to errors. Reset the failure count and online status after 10 minutes.
-          if (this.giveUpTime > 0 && (Date.now() - this.giveUpTime > (10 * 60 * 1000))) {
-            this.axInstance.get(this.healthURL)
-              .then(res => {
-                if (res.data.state === 'ONLINE') {
-                  this.online = true;
-                  this.giveUpTime = 0;
-                  this.failureCount = 0;
-                }
-              });
-          }
-        }
-      }, pollSeconds * 1000);
-    }
+    void [pollSeconds, getValue, service, characteristic, targetStateCharacteristic, getTargetState];
   }
 
   async sendCommand(capability: string, command: string, args?: unknown[]): Promise<boolean> {
@@ -209,7 +163,7 @@ export abstract class BasePlatformAccessory {
     try {
       await this.axInstance.post(this.commandURL, commandBody);
       this.log.debug(`${command} successful for ${this.name}`);
-      this.deviceStatus.timestamp = 0; // Force a refresh on next poll after a state change
+      this.deviceStatus.timestamp = 0; // Force a refresh on the next state request
       this.commandInProgress = false;
       return true;
     } catch (error) {

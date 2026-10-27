@@ -38,7 +38,7 @@ does not return a valid response causing homebridge to fail.
 * Added air conditioner support thanks to lucaponzanelli
 * Fixed window shade support (wasn't showing up)
 ## Fixed in version 1.5.10
-Fixed window shade support including webhook support for the window shade service.  Added polling paramter for window shades, 
+Fixed window shade support.  Added polling paramter for window shades,
 'PollWindowShadesSeconds'
 ## Fixed in version 1.5.9
 * Removed the check for the apostrophe as it caused more issues than solved.  With this change, if you try to add a device
@@ -59,7 +59,7 @@ Corrected status handling for mult-component devices.
 
 ## New in version 1.5.2
 * Support for multi-component devices
-* Support for buttons - requires subscription to the webhook service.  See the announcement [here](https://github.com/iklein99/homebridge-smartthings/discussions/141).
+* Support for buttons. Local hub events are delivered through SSE when `LocalHubEvents` is enabled.
 <p>
 IMPORTANT: Multi-button devices get loaded into the home app with the button numbers not always in the order that they
 are on the device.  Also, some devices, like the Aeotec Fob Remote will show 1 more button than there are on the device.
@@ -74,12 +74,6 @@ actions per button.
 ## Fixed in version 1.5.2
 * Ignore device names with a single quote will not match with the device name coming in from SmartThings due to character code
 conversion.  This has been fixed.
-## New in version 1.5.1
-SmartThings Webhook support is now supported and open to all.  See the announcement [here](https://github.com/iklein99/homebridge-smartthings/discussions/141).
-## New in 1.5.0
-Support for SmartThings webhook to support real-time update of device state changes.  Support for webhooks is in closed beta at 
-the moment, but will be made available soon.  
-
 ## Fixed in 1.4.23
 * If a sensor service doesn't return a valid value, it will be removed from the device.
 * Fixed some state update management in the Thermostat service.
@@ -229,22 +223,15 @@ Garage Door Opener, Locks and Window Shades that support the WindowShadeLevel co
 You will need to create a Smartthings personal access token.  You can do that here: https://account.smartthings.com/tokens.  Create a
 new token and make sure it has all of the device permissions, and if you want to use the Ignore Locations feature, you must include the List Locations (r:locations) permission.  Save your token and add it to the configuration.
 <br>
-By configuring the WebhookToken, the plugin will attempt to connect to the SmartThings
-Webhook Server that we're running and wait for events.  This will result in 
-the plugin ignoring the poll settings as polling will not occur.
-<br>
 This section should be added to the platforms array in your config.json file, but you can now edit using the config UI:
 <pre>
         {
-            "Name": "Smartthings Plugin",
+            "name": "Smartthings Plugin",
             "AccessToken": "INSERT YOUR PERSONAL ACCESS TOKEN HERE",
-            "WebhookToken: "INSERT WEBHOOK TOKEN HERE",
             "BaseURL": "https://api.smartthings.com/v1",
-            "GarageDoorMaxPoll": 40,
-            "PollLocksSeconds": 15,
-            "PollDoorsSeconds": 15,
-            "PollSensorsSeconds": 5,
-            "PollSwitchesAndLightsSeconds": 15
+            "LocalHubTokenFile": "/path/on/homebridge/hub-local-token.json",
+            "LocalHubAutoRenew": true,
+            "LocalHubEvents": true,
             "platform": "HomeBridgeSmartThings",
             "IgnoreLocations": [
                  "My location 1",
@@ -260,30 +247,20 @@ The "IgnoreLocations" array may be omitted.  This array can be used to specify l
 
 You need to restart Homebridge when you make changes to this file.
 
-### Using a custom webhook server
+### Local hub reads
 
-By default the plugin sends webhook requests to `https://stwh.kleinstudios.net/api/`. You can direct these requests to your own server by setting the `WEBHOOK_URL` environment variable before starting Homebridge.
+`LocalHubTokenFile` is optional. Set it to the absolute path of a hub credentials JSON file on the machine running Homebridge. The file must be readable by the Homebridge process and contain the hub ID, host, access token and trusted certificate, using the keys `hubId`, `hubHost`, `access_token`, and `public_certificate`. Keep the file private; the hub token is a credential. The existing cloud `AccessToken` is still required and cannot be used as the hub token.
 
-```
-WEBHOOK_URL=https://myserver.example.com/api/ homebridge
-```
+With local reads enabled, the plugin combines the hub's local device ID list with device metadata cached in Homebridge storage. It requests the cloud catalog when cached metadata is unavailable or a discovered local ID is missing from the cache. If the cloud is unavailable, cached metadata and restored Homebridge accessories can still be used. Device status and health are requested from the hub when available, with cloud fallback. Commands for devices reported by the hub are sent once to its local API. If a local command fails or its outcome is uncertain, the plugin reports the failure without retrying the command in the cloud. Devices not reported by the hub may still require the cloud API for commands and state. Devices are not automatically removed solely because they are missing from a local or cached list; configured exclusions still apply.
 
-This allows you to host your own webhook server that implements the same `/clientrequest` API.
+An HTTP 403 response for a device's status, health or command triggers a background refresh of the hub's device IDs and the cloud catalog. Concurrent failures share one refresh, with at least 30 seconds between refresh attempts. The plugin reads and validates every cloud catalog page before replacing its metadata cache and unregistering accessories absent from the complete result. A failed or invalid catalog response preserves cached devices. The failed device request is not retried, and commands are never replayed by catalog refresh. A 403 alone does not remove an accessory that is still in the catalog.
 
-### Hosting a local webhook endpoint
+Hub tokens observed in this setup expire after approximately 24 hours. To renew automatically, set `LocalHubAutoRenew` to `true` and place `samsung-account-token.json` beside the hub token file. The directory must belong to the Homebridge user with mode `0700`; both files must be owned by that user with mode `0600`. The Samsung file contains the existing account access and refresh tokens and their expiry times. The plugin checks at startup and periodically, renewing the hub token when six hours or less remain. Renewal requires internet access and a successful local hub ping. The plugin reads the hub token file before each local request.
 
-If you want the plugin itself to receive webhook events, set `LocalWebhookPort` in your configuration. When this value is greater than zero the plugin starts an HTTP server using the `@smartthings/smartapp` library. SmartThings should be configured to send lifecycle callbacks to the root path (`POST /`). For testing you can also send `POST /event` requests with a JSON body containing an `events` array. Each item uses the same structure as the remote webhook service.
+Samsung may rotate the refresh token. Only one host may own and renew a Samsung account credential; the local lock cannot coordinate copies on separate hosts. The renewed account credentials are saved before requesting a new hub token, and the previous hub token is retained until the new one passes the local ping. Do not restore an old backup over the current account credentials. If a refresh outcome is uncertain, the plugin stops further renewal and reports `RefreshOutcomeUnknown`; recovery requires establishing which credential is current or signing in again. Without a valid local token, local reads fall back to the cloud.
 
-Example `config.json` snippet:
+Set `LocalHubEvents` to `true` to receive local SSE device events for the discovered hub locations. The plugin stores subscription metadata alongside the hub token. A subscription explicitly imported as external is checked against the hub on each connection and is never modified, deleted, or automatically recreated. It reconnects after connection or token changes. The plugin fetches a state snapshot at startup and on SSE connection or reconnection. It does not poll device state periodically. A HomeKit request for a characteristic can trigger an on-demand status read, subject to a short cache; snapshots and on-demand reads may fall back to the cloud. When SSE is disconnected, state can remain stale until an event, reconnection or a HomeKit request. Snapshot reconciliation never replays button presses. Events during an outage cannot be recovered unless the hub supplies them after reconnect; replay is not established. For a plugin-owned subscription, repeated 403 or 404 responses may trigger a bounded replacement after verifying local hub access. Automatic replacements are limited to one every four hours and six unresolved archived subscriptions; older subscriptions are not deleted automatically. If creating a subscription has an uncertain result, the plugin retains a pending marker and requires investigation instead of creating duplicates.
 
-```
-    "LocalWebhookPort": 8080
-```
+### Development dependencies
 
-You can then send requests from Postman or another tool:
-
-```
-curl -X POST http://localhost:8080/event \
-  -H 'Content-Type: application/json' \
-  -d '{"events":[{"deviceId":"<id>","componentId":"main","capability":"switch","attribute":"switch","value":"on"}]}'
-```
+The plugin supports Node 22, 24 and 26. Development with ESLint 10 requires Node 22.13 or newer. CI tests Homebridge 1 and 2 on their supported Node versions, using the corresponding HAP implementation.

@@ -2,7 +2,7 @@ import { PlatformAccessory } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { SensorService } from './sensorService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class ContactSensorService extends SensorService {
 

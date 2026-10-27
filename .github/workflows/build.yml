@@ -1,4 +1,4 @@
-name: Build and Lint
+name: Build and Test
 
 on:
   pull_request:
@@ -7,31 +7,57 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: 22
+            homebridge: 1
+            hap_module: hap-nodejs
+          - node: 24
+            homebridge: 1
+            hap_module: hap-nodejs
+          - node: 22
+            homebridge: 2
+            hap_module: '@homebridge/hap-nodejs'
+          - node: 24
+            homebridge: 2
+            hap_module: '@homebridge/hap-nodejs'
+          - node: 26
+            homebridge: 2
+            hap_module: '@homebridge/hap-nodejs'
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v7
 
-      - name: Use Node.js 18.x
-        uses: actions/setup-node@v3
+      - name: Use Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v7
         with:
-          node-version: 18.x
+          node-version: ${{ matrix.node }}
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Install Homebridge 1
+        if: matrix.homebridge == 1
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund homebridge@1.11.4
 
       - name: Lint the project
         run: npm run lint
 
-      - name: Build the project
-        run: npm run build
+      - name: Test the project
+        run: npm test
         env:
           CI: true
+          HAP_NODEJS_MODULE: ${{ matrix.hap_module }}
 
       - name: Create NPM package
+        if: matrix.node == 24 && matrix.homebridge == 2
         run: npm pack
 
       - name: Upload NPM package
-        uses: actions/upload-artifact@v4
+        if: matrix.node == 24 && matrix.homebridge == 2
+        uses: actions/upload-artifact@v7
         with:
           name: npm-package
           path: '*.tgz'

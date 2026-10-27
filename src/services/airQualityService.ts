@@ -2,7 +2,7 @@ import { PlatformAccessory } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { SensorService } from './sensorService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class AirQualityService extends SensorService {
 
@@ -24,7 +24,7 @@ export class AirQualityService extends SensorService {
       this.service.setCharacteristic(platform.Characteristic.CarbonDioxideLevel, co2);
       this.service.setCharacteristic(platform.Characteristic.PM2_5Density, pm25Density);
 
-      let score = 0;
+      let score: number;
       if (pm25Density > 55) {
         return this.platform.Characteristic.AirQuality.POOR;
       } else if (pm25Density > 30) {

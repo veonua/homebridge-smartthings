@@ -2,8 +2,19 @@ import { PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
+import { ShortEvent } from '../shortEvent';
 
 export class BatteryService extends BaseService {
+
+  public processEvent(event: ShortEvent): void {
+    if (event.capability !== 'battery' || event.attribute !== 'battery' || typeof event.value !== 'number') {
+      return;
+    }
+    this.service.updateCharacteristic(this.platform.Characteristic.BatteryLevel, event.value);
+    this.service.updateCharacteristic(this.platform.Characteristic.StatusLowBattery, event.value <= 30 ?
+      this.platform.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW :
+      this.platform.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL);
+  }
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
     multiServiceAccessory: MultiServiceAccessory,
@@ -18,15 +29,6 @@ export class BatteryService extends BaseService {
     this.service.getCharacteristic(platform.Characteristic.StatusLowBattery)
       .onGet(this.getStatusLowBattery.bind(this));
 
-    let pollSensorSeconds = 5; // default to 10 seconds
-    if (this.platform.config.PollSensorsSeconds !== undefined) {
-      pollSensorSeconds = this.platform.config.PollSensorsSeconds;
-    }
-
-    if (pollSensorSeconds > 0) {
-      multiServiceAccessory.startPollingState(pollSensorSeconds, this.getBatteryLevel.bind(this), this.service,
-        platform.Characteristic.BatteryLevel);
-    }
   }
 
   async getBatteryLevel(): Promise<CharacteristicValue> {

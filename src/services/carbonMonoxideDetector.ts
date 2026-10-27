@@ -2,7 +2,7 @@ import { PlatformAccessory } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 import { SensorService } from './sensorService';
-import { ShortEvent } from '../webhook/subscriptionHandler';
+import { ShortEvent } from '../shortEvent';
 
 export class CarbonMonoxideDetectorService extends SensorService {
   serviceName = 'CarbonMonixideDetector';
@@ -31,7 +31,7 @@ export class CarbonMonoxideDetectorService extends SensorService {
 
   public processEvent(event: ShortEvent): void {
     this.log.debug(`Event updating CO detection for ${this.name} to ${event.value}`);
-    this.service.updateCharacteristic(this.platform.Characteristic.CarbonDioxideDetected,
+    this.service.updateCharacteristic(this.platform.Characteristic.CarbonMonoxideDetected,
       (event.value === 'detected' ? this.platform.Characteristic.CarbonMonoxideDetected.CO_LEVELS_ABNORMAL :
         this.platform.Characteristic.CarbonMonoxideDetected.CO_LEVELS_NORMAL) );
   }
