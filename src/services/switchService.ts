@@ -29,26 +29,7 @@ export class SwitchService extends BaseService {
 
   // Get the current state of the lock
   async getSwitchState(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    this.log.debug('Received getSwitchState() event for ' + this.name);
-
-    return new Promise((resolve, reject) => {
-      this.getStatus().then(success => {
-        if (success) {
-          let switchState;
-          try {
-            switchState = this.deviceStatus.status.switch.switch.value;
-          } catch {
-            this.log.error(`Missing switch status from ${this.name}`);
-          }
-          this.log.debug(`Switch value from ${this.name}: ${switchState}`);
-          resolve(switchState === 'on');
-        } else {
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    return await this.statusValue<string>('switch', 'switch') === 'on';
   }
 
   public processEvent(event: ShortEvent): void {

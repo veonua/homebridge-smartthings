@@ -41,27 +41,12 @@ export class DoorService extends BaseService {
 
   // Return the current target state
   async getTargetDoorState(): Promise<CharacteristicValue> {
-    // If it has been more than 20 seconds since we've sent a transition command,
-    // reset the target state to the current state.
-
     if (Date.now() - this.doorInTransitionStart > 20000) {
-      return new Promise((resolve, reject) => {
-        this.getStatus().then(success => {
-          if (!success) {
-            reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-            return;
-          }
-          this.targetState = this.deviceStatus.status.doorControl.door.value === 'closed' ||
-            this.deviceStatus.status.doorControl.door.value === 'closing' ?
-            this.platform.Characteristic.TargetDoorState.CLOSED :
-            this.platform.Characteristic.TargetDoorState.OPEN;
-          this.log.debug(`Reset ${this.name} to ${this.targetState}`);
-          resolve(this.targetState);
-        });
-      });
-    } else {
-      return this.targetState;
+      const state = await this.statusValue<string>('doorControl', 'door');
+      this.targetState = state === 'closed' || state === 'closing' ?
+        this.platform.Characteristic.TargetDoorState.CLOSED : this.platform.Characteristic.TargetDoorState.OPEN;
     }
+    return this.targetState;
   }
 
   // Set the target state of the door
@@ -76,22 +61,7 @@ export class DoorService extends BaseService {
 
   // Get the current state of the door
   async getCurrentDoorState(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    this.log.debug('Received getDoorState() event for ' + this.name);
-
-    return new Promise((resolve, reject) => {
-      this.getStatus().then(success => {
-        if (success) {
-          const doorState = this.deviceStatus.status.doorControl.door.value;
-          this.log.debug(`DoorState value from ${this.name}: ${doorState}`);
-
-          resolve(this.mapDoorState(doorState));
-        } else {
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    return this.mapDoorState(await this.statusValue<string>('doorControl', 'door'));
   }
 
   public processEvent(event: ShortEvent): void {

@@ -44,6 +44,15 @@
         "required": false,
         "default": false
       },
+      "SetColorDevices": {
+        "title": "Lights Requiring Combined Color Commands",
+        "description": "Device names or IDs for lights that accept setColor but not separate hue and saturation commands.",
+        "type": "array",
+        "items": {
+          "title": "Device Name or ID",
+          "type": "string"
+        }
+      },
       "ExposeHumiditySensorForAirConditioners": {
         "title": "Expose humidity Sensor for air Conditioners if available.",
         "type": "boolean",

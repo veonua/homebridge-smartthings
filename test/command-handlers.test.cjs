@@ -8,6 +8,7 @@ const platform = {
   Characteristic: {
     Active: { ACTIVE: 1 }, TargetDoorState: { CLOSED: 1 }, LockTargetState: {},
     TargetHeatingCoolingState: { OFF: 0, HEAT: 1, COOL: 2, AUTO: 3 },
+    CurrentHeatingCoolingState: { OFF: 0, HEAT: 1, COOL: 2 },
   },
 };
 const log = { debug() {}, error() {}, info() {}, warn() {} };
@@ -68,6 +69,26 @@ test('light combined color mode awaits a command and reports false', async () =>
   service.requireSetColor = true;
   await assert.rejects(service.setHue(180), err => err instanceof HapStatusError && err.code === HAP_FAILURE);
   assert.deepEqual(calls, [['colorControl', 'setColor', [{ hue: 50, saturation: 20 }], 'secondary']]);
+});
+
+test('missing characteristic values fail promptly without affecting other fields', async t => {
+  for (const [file, type, method] of [
+    ['lightService', 'LightService', 'getSwitchState'],
+    ['lightService', 'LightService', 'getLevel'],
+    ['lightService', 'LightService', 'getHue'],
+    ['lightService', 'LightService', 'getColorTemp'],
+    ['batteryService', 'BatteryService', 'getBatteryLevel'],
+    ['fanSpeedService', 'FanSpeedService', 'getLevel'],
+    ['doorService', 'DoorService', 'getCurrentDoorState'],
+    ['lockService', 'LockService', 'getLockCurrentState'],
+    ['valveService', 'ValveService', 'getValveState'],
+    ['windowCoveringService', 'WindowCoveringService', 'getCurrentPosition'],
+  ]) await t.test(`${type}.${method}`, async () => {
+    const service = makeService(file, type, async () => true);
+    service.deviceStatus = { status: {} };
+    service.getStatus = async () => true;
+    await assert.rejects(service[method](), err => err instanceof HapStatusError && err.code === HAP_FAILURE);
+  });
 });
 
 test('failed door, lock and shade commands do not update requested targets', async () => {
@@ -171,7 +192,8 @@ test('thermostat publishes only the active setpoint and switches it on a mode ev
   assert.deepEqual(updates, [[target, 21]]);
   updates.length = 0;
   service.processEvent({ capability: 'thermostatMode', attribute: 'thermostatMode', value: 'cool' });
-  assert.deepEqual(updates, [[platform.Characteristic.TargetHeatingCoolingState, 2], [target, 25]]);
+  assert.deepEqual(updates, [[platform.Characteristic.TargetHeatingCoolingState, 2],
+    [platform.Characteristic.CurrentHeatingCoolingState, 2], [target, 25]]);
   assert.equal(service.targetTemperature, 25);
   updates.length = 0;
   service.processEvent({ capability: 'thermostatHeatingSetpoint', attribute: 'heatingSetpoint', value: 23, unit: 'C' });
@@ -188,7 +210,8 @@ test('thermostat mode change does not publish a target without a known unit or v
   service.service.updateCharacteristic = (characteristic, value) => updates.push([characteristic, value]);
   service.deviceStatus = { status: { thermostatCoolingSetpoint: { coolingSetpoint: { value: 22 } } } };
   service.processEvent({ capability: 'thermostatMode', attribute: 'thermostatMode', value: 'cool' });
-  assert.deepEqual(updates, [[platform.Characteristic.TargetHeatingCoolingState, 2]]);
+  assert.deepEqual(updates, [[platform.Characteristic.TargetHeatingCoolingState, 2],
+    [platform.Characteristic.CurrentHeatingCoolingState, 2]]);
   service.deviceStatus.status.temperatureMeasurement = { temperature: { unit: 'C' } };
   service.processEvent({ capability: 'thermostatMode', attribute: 'thermostatMode', value: 'cool' });
   assert.deepEqual(updates.at(-1), [target, 22]);

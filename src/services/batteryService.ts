@@ -32,50 +32,12 @@ export class BatteryService extends BaseService {
   }
 
   async getBatteryLevel(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    this.log.debug('Received getBatteryLevel() event for ' + this.name);
-
-    return new Promise((resolve, reject) => {
-      this.getStatus().then(success => {
-        if (success) {
-          const batteryLevel = this.deviceStatus.status.battery.battery.value;
-          if (batteryLevel === null) {
-            return reject (new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-          }
-          this.log.debug(`Battery value from ${this.name}: ${batteryLevel}`);
-          resolve(batteryLevel);
-        } else {
-          reject (new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    return this.statusValue<number>('battery', 'battery');
   }
 
   async getStatusLowBattery(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    this.log.debug('Received getStatusLowBattery() event for ' + this.name);
-
-    return new Promise((resolve, reject) => {
-      this.getStatus().then(success => {
-        if (success) {
-          const batteryLevel = this.deviceStatus.status.battery.battery.value;
-          if (batteryLevel === null) {
-            return reject (new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-          }
-          if (batteryLevel > 40) {
-            this.log.debug(`${this.name} battery level normal`);
-          } else {
-            this.log.debug(`${this.name} battery level LOW`);
-          }
-          resolve(batteryLevel <= 30 ?
-            this.platform.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW :
-            this.platform.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL);
-        } else {
-          reject (new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    const battery = await this.statusValue<number>('battery', 'battery');
+    return battery <= 30 ? this.platform.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW :
+      this.platform.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
   }
 }

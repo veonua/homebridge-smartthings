@@ -59,27 +59,10 @@ export class WindowCoveringService extends BaseService {
   }
 
   async getCurrentPositionState(): Promise<CharacteristicValue> {
-    this.log.debug('Received getCurrentPositionState() event for ' + this.name);
-    return new Promise((resolve, reject) => {
-      this.getStatus().then(success => {
-        if (success) {
-          const state = this.deviceStatus.status.windowShade.windowShade.value;
-          if (state === 'opening') {
-            this.currentPositionState = this.states.decreasing;
-          } else if (state === 'closing') {
-            this.currentPositionState = this.states.increasing;
-          } else {
-            this.currentPositionState = this.states.stopped;
-          }
-          this.log.debug(`getCurrentPositionState() SUCCESSFUL for ${this.name} return value ${state}, ` +
-            `setting to ${this.currentPositionState}`);
-          resolve(this.currentPositionState);
-        } else {
-          this.log.error('getCurrentPositionState() FAILED for ' + this.name);
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    const state = await this.statusValue<string>('windowShade', 'windowShade');
+    this.currentPositionState = state === 'opening' ? this.states.decreasing :
+      state === 'closing' ? this.states.increasing : this.states.stopped;
+    return this.currentPositionState;
   }
 
 
@@ -97,30 +80,8 @@ export class WindowCoveringService extends BaseService {
    * this.service.updateCharacteristic(this.platform.Characteristic.On, true)
    */
   async getCurrentPosition(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-
-    return new Promise<CharacteristicValue>((resolve, reject) => {
-
-
-
-      this.getStatus().then(success => {
-
-        if (success) {
-          let position: number;
-          if (this.useWindowShadeLevel) {
-            position = this.deviceStatus.status.windowShadeLevel.shadeLevel.value;
-          } else {
-            position = this.deviceStatus.status.switchLevel.level.value;
-          }
-          this.log.debug('onGet() SUCCESSFUL for ' + this.name + '. value = ' + position);
-          resolve(position);
-        } else {
-          this.log.error('onGet() FAILED for ' + this.name + '. Undefined value');
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    return this.useWindowShadeLevel ? this.statusValue<number>('windowShadeLevel', 'shadeLevel') :
+      this.statusValue<number>('switchLevel', 'level');
   }
 
   public processEvent(event: ShortEvent): void {

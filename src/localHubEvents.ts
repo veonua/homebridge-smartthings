@@ -16,7 +16,8 @@ const FORBIDDEN_RECHECK_MS = 30000;
 const MAX_UNRESOLVED_ARCHIVES = 6;
 const KNOWN_ERRORS = new Set([
   'CertificateHostnameMismatch', 'CertificateVerificationFailed', 'ConnectionClosed', 'ConnectionFailed', 'ConnectionTimeout',
-  'CredentialReadFailed', 'ExternalSubscriptionMissing', 'HubTokenExpired', 'InvalidCertificate', 'InvalidCredentials',
+  'CredentialReadFailed', 'ExternalSubscriptionMissing', 'ExternalSubscriptionFilterChanged', 'HubTokenExpired',
+  'InvalidCertificate', 'InvalidCredentials',
   'InvalidEventStream', 'InvalidRegistrationUrl', 'RequestFailed', 'RequestTimeout', 'ResponseTooLarge', 'Stopped',
   'StreamFailed', 'StreamRejected', 'StreamTimeout', 'SubscriptionCreationUnknown', 'SubscriptionLockBusy',
   'SubscriptionLockUnavailable', 'SubscriptionLookupFailed', 'SubscriptionMismatch', 'SubscriptionRotationLimited',
@@ -452,7 +453,8 @@ export class LocalHubEvents {
     }
     const external = saved?.ownership === 'external';
     if (!saved || saved.version !== 1 || saved.hubId !== c.hubId || !Array.isArray(saved.locationIds) ||
-      saved.locationIds.length !== this.locations.length || !this.locations.every(id => saved.locationIds.includes(id)) ||
+      !saved.locationIds.length || saved.locationIds.some((id: unknown) => typeof id !== 'string' || !UUID.test(id)) ||
+      new Set(saved.locationIds).size !== saved.locationIds.length ||
       typeof saved.name !== 'string' || (external
         ? !saved.name.trim() || saved.name.length > 128 || Array.from(saved.name as string)
           .some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
@@ -471,7 +473,7 @@ export class LocalHubEvents {
 
   private verifyOwnership(data: any, saved: Stored): void {
     if (!data || data.subscriptionId !== saved.subscriptionId || data.name !== saved.name ||
-      !matchesFilters(data.subscriptionFilters, this.locations)) {
+      !matchesFilters(data.subscriptionFilters, saved.locationIds)) {
       throw new Error('SubscriptionMismatch');
     }
   }
@@ -568,6 +570,7 @@ export class LocalHubEvents {
     const file = this.options.subscriptionFile;
     let saved = await this.readState(c);
     let previous: Stored | undefined;
+    let locationsChanged = false;
     if (saved?.stage === 'pending') {
       throw new Error('SubscriptionCreationUnknown');
     }
@@ -581,14 +584,25 @@ export class LocalHubEvents {
       }
       if (reply.status === 200) {
         this.forbidden = undefined;
-        return this.verifySubscription(reply.data, saved, originOf(c));
+        const registration = this.verifySubscription(reply.data, saved, originOf(c));
+        locationsChanged = saved.locationIds.length !== this.locations.length ||
+          !this.locations.every(id => saved!.locationIds.includes(id));
+        if (!locationsChanged) {
+          return registration;
+        }
+        if (saved.ownership === 'external') {
+          throw new Error('ExternalSubscriptionFilterChanged');
+        }
       }
-      if (saved.ownership === 'external') {
+      if (saved.ownership === 'external' && !locationsChanged) {
         this.forbidden = undefined;
         throw new Error(reply.status === 404 ? 'ExternalSubscriptionMissing' : 'SubscriptionLookupFailed');
       }
       const credentialHash = `${c.hubId}:${c.hubHost}:${c.hubPort ?? 8766}:${idHash(c)}`;
-      if (reply.status === 403) {
+      if (locationsChanged) {
+        // The owned subscription was verified, but it cannot cover the new filter.
+        // Keep it archived and create a replacement without deleting the old one.
+      } else if (reply.status === 403) {
         const now = Date.now();
         if (!this.forbidden || this.forbidden.subscriptionId !== saved.subscriptionId ||
           this.forbidden.credentials !== credentialHash || now < this.forbidden.firstSeen) {
@@ -624,7 +638,7 @@ export class LocalHubEvents {
         }
       }
       if (!Number.isFinite(latestCreation) || latestCreation < 0 || now < latestCreation ||
-        now - latestCreation < ROTATION_INTERVAL_MS) {
+        (!locationsChanged && now - latestCreation < ROTATION_INTERVAL_MS)) {
         throw new Error('SubscriptionRotationLimited');
       }
       const archiveName = `previous-${saved.subscriptionId}.json`;
@@ -938,7 +952,7 @@ export class LocalHubEvents {
           this.report(code);
         }
         if (['SubscriptionCreationUnknown', 'SubscriptionMismatch', 'SubscriptionStateInvalid',
-          'ExternalSubscriptionMissing'].includes(code)) {
+          'ExternalSubscriptionMissing', 'ExternalSubscriptionFilterChanged'].includes(code)) {
           break;
         }
         failures++;

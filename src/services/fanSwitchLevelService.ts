@@ -32,21 +32,7 @@ export class FanSwitchLevelService extends BaseService {
 
   // Get the current state of the lock
   async getSwitchState(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    this.log.debug('Received getSwitchState() event for ' + this.name);
-
-    return new Promise((resolve, reject) => {
-      this.getStatus().then(success => {
-        if (success) {
-          const switchState = this.deviceStatus.status.switch.switch.value;
-          this.log.debug(`SwitchState value from ${this.name}: ${switchState}`);
-          resolve(switchState === 'on');
-        } else {
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    return await this.statusValue<string>('switch', 'switch') === 'on';
   }
 
   async setLevel(value: CharacteristicValue): Promise<void> {
@@ -55,28 +41,7 @@ export class FanSwitchLevelService extends BaseService {
   }
 
   async getLevel(): Promise<CharacteristicValue> {
-    this.log.debug('Received getLevel() event for ' + this.name);
-    let level = 0;
-    return new Promise<CharacteristicValue>((resolve, reject) => {
-
-
-      this.getStatus().then((success) => {
-        if (!success) {
-          this.log.error(`Could not get device status for ${this.name}`);
-          return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-
-        if (this.deviceStatus.status.switchLevel.level.value !== undefined) {
-          level = this.deviceStatus.status.switchLevel.level.value;
-          this.log.debug('getLevel() SUCCESSFUL for ' + this.name + '. value = ' + level);
-          resolve(level);
-
-        } else {
-          this.log.error('getLevel() FAILED for ' + this.name + '. Undefined value');
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    return this.statusValue<number>('switchLevel', 'level');
   }
 
   public processEvent(event: ShortEvent): void {

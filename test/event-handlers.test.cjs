@@ -5,6 +5,7 @@ const { EventEmitter } = require('node:events');
 const { MultiServiceAccessory } = require('../dist/multiServiceAccessory');
 const { BatteryService } = require('../dist/services/batteryService');
 const { LightService } = require('../dist/services/lightService');
+const { BaseService } = require('../dist/services/baseService');
 const { TemperatureService } = require('../dist/services/temperatureService');
 const { ThermostatService } = require('../dist/services/thermostatService');
 const { AirConditionerService } = require('../dist/services/airConditionerService');
@@ -124,6 +125,52 @@ test('saturation rejects invalid status instead of sending null to HomeKit', asy
   light.processEvent(ev({ capability: 'colorControl', attribute: 'saturation', value: 25 }));
   assert.equal(hapSaturation.value, 25);
   assert.equal(light.currentColor.saturation, 25);
+});
+
+test('combined light receives hue, saturation and color temperature events', t => {
+  const { h, accessory } = handler();
+  accessory.context.device.components = [{ id: 'main', capabilities:
+    ['switch', 'switchLevel', 'colorControl', 'colorTemperature'].map(id => ({ id })) }];
+  h.platform.Service.Switch = function() {};
+  h.platform.Service.Lightbulb = function() {};
+  h.platform.Characteristic = { ...characteristic, Hue: 'hue', Saturation: 'saturation' };
+  t.mock.method(BaseService.prototype, 'setServiceType', function() {
+    this.service = fakeService();
+    this.service.getCharacteristic = () => ({ onGet() { return this; }, onSet() { return this; } });
+    accessory.services.push(this.service);
+  });
+  t.mock.method(LightService.prototype, 'getHue', async () => 0);
+  t.mock.method(LightService.prototype, 'getSaturation', async () => 0);
+  h.addComponent('main', ['switch', 'switchLevel', 'colorControl', 'colorTemperature']);
+  const light = h.services[0];
+  assert.equal(h.processEvent(ev({ capability: 'colorControl', attribute: 'hue', value: 50 })), true);
+  assert.equal(h.processEvent(ev({ capability: 'colorControl', attribute: 'saturation', value: 55 })), true);
+  assert.equal(h.processEvent(ev({ capability: 'colorTemperature', attribute: 'colorTemperature', value: 6500 })), true);
+  assert.deepEqual(light.service.updates, [['hue', 180], ['saturation', 55], ['colorTemperature', 140]]);
+  assert.deepEqual(light.currentColor, { hue: 50, saturation: 55 });
+});
+
+test('configured combined-color light sends one setColor command with the other color preserved', async t => {
+  const { h, accessory } = handler();
+  accessory.context.device.components = [{ id: 'main', capabilities: ['switch', 'colorControl'].map(id => ({ id })) }];
+  h.platform.config.SetColorDevices = [' DEV '];
+  h.platform.Service.Switch = function() {};
+  h.platform.Service.Lightbulb = function() {};
+  t.mock.method(BaseService.prototype, 'setServiceType', function() {
+    this.service = fakeService();
+    this.service.getCharacteristic = () => ({ onGet() { return this; }, onSet() { return this; } });
+    accessory.services.push(this.service);
+  });
+  t.mock.method(LightService.prototype, 'getHue', async () => 0);
+  t.mock.method(LightService.prototype, 'getSaturation', async () => 0);
+  const calls = [];
+  h.ensureOnline = async () => true;
+  h.sendCommand = async (...args) => { calls.push(args); return true; };
+  h.addComponent('main', ['switch', 'colorControl']);
+  const light = h.services[0];
+  light.currentColor = { hue: 10, saturation: 20 };
+  await light.setHue(180);
+  assert.deepEqual(calls, [['colorControl', 'setColor', [{ hue: 50, saturation: 20 }], 'main']]);
 });
 
 test('temperature and thermostat only publish temperatures with known units', () => {

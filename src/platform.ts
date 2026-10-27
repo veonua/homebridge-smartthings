@@ -43,6 +43,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   private readonly localResourceRetryAt = new Map<string, number>();
   private catalogRefresh: Promise<void> | undefined;
   private catalogRefreshRetryAt = 0;
+  private catalogRefreshTimer: NodeJS.Timeout | undefined;
   private readonly removedDeviceIds = new Set<string>();
   private readonly forbiddenDeviceIds = new Set<string>();
 
@@ -56,6 +57,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     this.axInstance = axios.create({
       baseURL: config.BaseURL,
       headers: { 'Authorization': 'Bearer: ' + config.AccessToken },
+      timeout: 5000,
     });
     this.log.debug('Finished initializing platform:', this.config.name);
     if (typeof config.LocalHubTokenFile === 'string' && config.LocalHubTokenFile.trim()) {
@@ -69,6 +71,10 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     }
     this.api.on('shutdown', () => {
       this.shuttingDown = true;
+      if (this.catalogRefreshTimer) {
+        clearTimeout(this.catalogRefreshTimer);
+        this.catalogRefreshTimer = undefined;
+      }
       void this.localEvents?.stop();
     });
 
@@ -363,16 +369,36 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
       return;
     }
     this.forbiddenDeviceIds.add(deviceId);
-    if (this.catalogRefresh || Date.now() < this.catalogRefreshRetryAt) {
+    this.scheduleCatalogRefresh();
+  }
+
+  private scheduleCatalogRefresh(): void {
+    if (this.shuttingDown || this.catalogRefresh || !this.forbiddenDeviceIds.size) {
       return;
     }
+    const delay = Math.max(0, this.catalogRefreshRetryAt - Date.now());
+    if (delay > 0) {
+      if (!this.catalogRefreshTimer) {
+        this.catalogRefreshTimer = setTimeout(() => {
+          this.catalogRefreshTimer = undefined;
+          this.scheduleCatalogRefresh();
+        }, delay);
+        this.catalogRefreshTimer.unref();
+      }
+      return;
+    }
+    if (this.catalogRefreshTimer) {
+      clearTimeout(this.catalogRefreshTimer);
+      this.catalogRefreshTimer = undefined;
+    }
     this.catalogRefreshRetryAt = Date.now() + 30000;
-    this.log.info(`Device ${deviceId} returned HTTP 403; refreshing the device catalog`);
+    this.log.info('Device returned HTTP 403; refreshing the device catalog');
     // Keep the failed HomeKit request independent of the background catalog refresh.
     this.catalogRefresh = this.refreshDeviceCatalog().catch(() => {
       this.log.warn('Could not refresh the device catalog after HTTP 403; keeping cached devices');
     }).finally(() => {
       this.catalogRefresh = undefined;
+      this.scheduleCatalogRefresh();
     });
   }
 

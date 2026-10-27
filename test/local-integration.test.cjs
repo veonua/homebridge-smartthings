@@ -103,6 +103,13 @@ test('status and health use local for known IDs and cloud for unsupported or mal
   assert.deepEqual(f.cloudCalls, ['devices/cloud/status', 'devices/a/health']);
 });
 
+test('cloud fallback has a finite timeout', t => {
+  const f = setup(t);
+  const api = { hap: { Service: {}, Characteristic: {} }, user: { storagePath: () => f.directory }, on() {} };
+  const p = new IKHomeBridgeHomebridgePlatform(f.platform.log, f.platform.config, api);
+  assert.ok(p.axInstance.defaults.timeout > 0 && p.axInstance.defaults.timeout <= 5000);
+});
+
 test('accessory falls back to cloud when local status lacks a required component', async t => {
   const f = setup(t);
   cache(f.directory, [device('a')]);
@@ -118,6 +125,24 @@ test('accessory falls back to cloud when local status lacks a required component
   assert.equal(await handler.refreshStatus(), true);
   assert.deepEqual(handler.components[0].status, status('off').components.main);
   assert.deepEqual(f.cloudCalls, ['devices/a/status']);
+});
+
+test('a null local saturation does not prevent reading a valid switch without cloud', async t => {
+  const f = setup(t);
+  await f.platform.refreshLocalDeviceIds();
+  f.platform.localHub.get = async p => p.endsWith('/health') ? { state: 'ONLINE' } : {
+    components: { main: { switch: { switch: { value: 'on' } },
+      colorControl: { hue: { value: 42 }, saturation: { value: null } } } },
+  };
+  const info = { setCharacteristic() { return this; } };
+  const accessory = { UUID: 'a', context: { device: device('a') }, getService: () => info };
+  const handler = new MultiServiceAccessory(f.platform, accessory);
+  handler.components.push({ componentId: 'main', capabilities: ['switch', 'colorControl'], status: {} });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(await handler.refreshStatus(), true);
+  assert.equal(handler.components[0].status.switch.switch.value, 'on');
+  assert.equal(handler.components[0].status.colorControl.saturation.value, null);
+  assert.deepEqual(f.cloudCalls, []);
 });
 
 test('location exclusions use cached location metadata when cloud is unavailable', async t => {
@@ -168,7 +193,7 @@ test('an accessory initially offline checks health and recovers on demand', asyn
   assert.equal(handler.isOnline(), true);
 });
 
-test('missing capability attribute falls back to cloud while zero is a valid local value', async t => {
+test('a missing attribute stays local while zero is a valid local value', async t => {
   const f = setup(t);
   cache(f.directory, [device('a')]);
   await f.platform.getOnlineDevices();
@@ -181,8 +206,8 @@ test('missing capability attribute falls back to cloud while zero is a valid loc
   handler.components.push({ componentId: 'main', capabilities: ['switch'], status: {} });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(await handler.refreshStatus(), true);
-  assert.deepEqual(handler.components[0].status, status('off').components.main);
-  assert.deepEqual(f.cloudCalls, ['devices/a/status']);
+  assert.deepEqual(handler.components[0].status, { switch: {} });
+  assert.deepEqual(f.cloudCalls, []);
 
   const now = Date.now();
   t.mock.method(Date, 'now', () => now + 31000);
@@ -190,7 +215,30 @@ test('missing capability attribute falls back to cloud while zero is a valid loc
   handler.forceNextStatusRefresh();
   assert.equal(await handler.refreshStatus(), true);
   assert.equal(handler.components[0].status.switch.switch.value, 0);
-  assert.deepEqual(f.cloudCalls, ['devices/a/status']);
+  assert.deepEqual(f.cloudCalls, []);
+});
+
+test('a missing local color attribute does not block switch and rejects only that characteristic', async t => {
+  const f = setup(t);
+  await f.platform.refreshLocalDeviceIds();
+  f.platform.localHub.get = async p => p.endsWith('/health') ? { state: 'ONLINE' } : {
+    components: { main: { switch: { switch: { value: 'on' } }, colorControl: { hue: { value: 42 } } } },
+  };
+  const info = { setCharacteristic() { return this; } };
+  const accessory = { UUID: 'a', context: { device: device('a') }, getService: () => info };
+  const handler = new MultiServiceAccessory(f.platform, accessory);
+  handler.components.push({ componentId: 'main', capabilities: ['switch', 'colorControl'], status: {} });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(await handler.refreshStatus(), true);
+  const { LightService } = require('../dist/services/lightService');
+  const light = Object.create(LightService.prototype);
+  light.platform = { api: { hap: { HapStatusError: class extends Error {} } } };
+  light.log = { debug() {} }; light.name = 'test';
+  light.deviceStatus = handler.components[0]; light.currentColor = { hue: 0, saturation: 0 };
+  light.getStatus = async () => true;
+  assert.equal(await light.getSwitchState(), true);
+  await assert.rejects(light.getSaturation());
+  assert.deepEqual(f.cloudCalls, []);
 });
 
 test('local resource failures back off independently and recover after retry', async t => {

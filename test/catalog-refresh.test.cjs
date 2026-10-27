@@ -30,6 +30,7 @@ function fixture(t, ids = ['kept', 'deleted']) {
   const platform = new IKHomeBridgeHomebridgePlatform(log, {
     BaseURL: 'https://example.invalid/v1/', AccessToken: 'unused', LocalHubTokenFile: '/unused/token',
   }, api);
+  t.after(() => api.emit('shutdown'));
   platform.accessories.push(...ids.map(id => ({ UUID: id, context: { device: device(id) } })));
   platform.accessoryObjects = ids.map(id => ({ id }));
   platform.localDeviceIds = new Set(['kept']);
@@ -76,6 +77,27 @@ test('concurrent 403s share one local request and remove each missing failing de
   await f.platform.catalogRefresh;
   assert.deepEqual(f.removed.map(a => a.UUID).sort(), ['also-deleted', 'deleted']);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.file)), ['kept', 'untouched'].map(device));
+});
+
+test('a 403 during cooldown schedules a refresh without requiring another error', async t => {
+  const f = fixture(t, ['kept', 'deleted', 'also-deleted']);
+  let now = 100000, scheduled;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(globalThis, 'setTimeout', (callback, delay) => {
+    scheduled = { callback, delay, unref() {} };
+    return scheduled;
+  });
+  t.mock.method(globalThis, 'clearTimeout', () => {});
+  f.platform.refreshCatalogOnForbidden('deleted', f.error);
+  await f.platform.catalogRefresh;
+  f.platform.refreshCatalogOnForbidden('also-deleted', f.error);
+  assert.equal(scheduled.delay, 30000);
+  assert.deepEqual(f.removed.map(a => a.UUID), ['deleted']);
+  now += scheduled.delay;
+  scheduled.callback();
+  await f.platform.catalogRefresh;
+  assert.deepEqual(f.removed.map(a => a.UUID), ['deleted', 'also-deleted']);
+  assert.equal(f.localCalls.length, 2);
 });
 
 test('a failing device still present in the local list is retained', async t => {

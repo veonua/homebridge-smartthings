@@ -57,46 +57,23 @@ export class ThermostatService extends BaseService {
   }
 
   // TARGET STATE CALLBACKS
-  async getTargetHeatingCoolingState():Promise<CharacteristicValue> {
-    this.log.debug('Received getTargetHeatingCoolingState for ' + this.name);
-    return new Promise((resolve) => {
-      // If we don't have the capability of thermostatMode, then just return AUTO
-      if (this.capabilities.find((c) => c === 'thermostatMode') === undefined) {
-        resolve(this.targetHeatingCoolingState = this.platform.Characteristic.TargetHeatingCoolingState.AUTO);
-        return;
+  async getTargetHeatingCoolingState(): Promise<CharacteristicValue> {
+    if (!this.capabilities.includes('thermostatMode')) {
+      return this.targetHeatingCoolingState = this.platform.Characteristic.TargetHeatingCoolingState.AUTO;
+    }
+    try {
+      const state = await this.statusValue<string>('thermostatMode', 'thermostatMode');
+      const target = this.platform.Characteristic.TargetHeatingCoolingState;
+      switch (state) {
+        case 'cool': this.targetHeatingCoolingState = target.COOL; break;
+        case 'heat': this.targetHeatingCoolingState = target.HEAT; break;
+        case 'auto': this.targetHeatingCoolingState = target.AUTO; break;
+        case 'off': this.targetHeatingCoolingState = target.OFF; break;
       }
-      this.getStatus().then(success => {
-        let state;
-        if (success) {
-          state = this.deviceStatus.status.thermostatMode.thermostatMode.value;
-          if (state === null || state === undefined) {
-            this.log.error(`Received invalid heating / cooling state from ${this.name}`);
-            resolve(this.targetHeatingCoolingState);
-            return;
-          }
-          switch(state) {
-            case 'cool':
-              resolve(this.targetHeatingCoolingState = this.platform.Characteristic.TargetHeatingCoolingState.COOL);
-              return;
-
-            case 'heat':
-              resolve(this.targetHeatingCoolingState = this.platform.Characteristic.TargetHeatingCoolingState.HEAT);
-              return;
-
-            case 'auto':
-              resolve(this.targetHeatingCoolingState = this.platform.Characteristic.TargetHeatingCoolingState.AUTO);
-              return;
-
-            default:
-              resolve(this.targetHeatingCoolingState = this.platform.Characteristic.TargetHeatingCoolingState.OFF);
-              return;
-          }
-        } else {
-          resolve(this.targetHeatingCoolingState);
-          return;
-        }
-      });
-    });
+    } catch {
+      // Preserve the last known target when this field is unavailable.
+    }
+    return this.targetHeatingCoolingState;
   }
 
   // Set the target state of the thermostat
@@ -117,78 +94,23 @@ export class ThermostatService extends BaseService {
 
   // CURRENT STATE
   async getCurrentHeatingCoolingState(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    this.log.debug('Received getCurrentHeatingCoolingState() event for ' + this.name);
-
-    return new Promise((resolve, reject) => {
-
-      if (this.capabilities.find((c) => c === 'thermostatMode') === undefined) {
-        this.log.debug(`Thermostat ${this.name} does not support thermostatMode.  Returning OFF`);
-        resolve(this.platform.Characteristic.CurrentHeatingCoolingState.OFF);
-        return;
-      }
-
-      this.getStatus().then(success => {
-        if (success) {
-          let thermostatMode;
-          try {
-            thermostatMode = this.deviceStatus.status.thermostatMode.thermostatMode.value;
-          } catch {
-            this.log.warn(`Missing thermostatMode from ${this.name}`);
-            resolve(this.targetHeatingCoolingState);
-            return;
-          }
-          this.log.debug(`thermostatMode value from ${this.name}: ${thermostatMode}`);
-
-          switch (thermostatMode) {
-            case 'cool':
-              resolve(this.platform.Characteristic.CurrentHeatingCoolingState.COOL);
-              break;
-
-            case 'heat':
-              resolve(this.platform.Characteristic.CurrentHeatingCoolingState.HEAT);
-              break;
-
-            default:
-              resolve(this.platform.Characteristic.CurrentHeatingCoolingState.OFF);
-          }
-        } else {
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    const current = this.platform.Characteristic.CurrentHeatingCoolingState;
+    if (!this.capabilities.includes('thermostatMode')) {
+      return current.OFF;
+    }
+    const mode = await this.statusValue<string>('thermostatMode', 'thermostatMode');
+    return mode === 'heat' ? current.HEAT : mode === 'cool' ? current.COOL : current.OFF;
   }
 
   // CURRENT TEMP
   async getCurrentTemperature(): Promise<CharacteristicValue> {
-    this.log.debug('Received getCurrentTemperature for ' + this.name);
-    return new Promise((resolve) => {
-      this.getStatus().then((success) => {
-        if (success) {
-          if (this.deviceStatus.status.temperatureMeasurement.temperature.value === null ||
-            this.deviceStatus.status.temperatureMeasurement.temperature.value === undefined ||
-            this.deviceStatus.status.temperatureMeasurement.temperature.unit === null ||
-            this.deviceStatus.status.temperatureMeasurement.temperature.unit === undefined) {
-            this.log.warn(`${this.name} returned bad value for status`);
-            throw ('Bad Value');
-          }
-          if (this.deviceStatus.status.temperatureMeasurement.temperature.unit === 'F') {
-            this.log.debug('Converting temp to celcius');
-            this.units = 'F';
-            resolve((this.deviceStatus.status.temperatureMeasurement.temperature.value as number - 32) * (5 / 9)); // Convert to Celcius
-          } else {
-            this.units = 'C';
-            resolve(this.deviceStatus.status.temperatureMeasurement.temperature.value);
-          }
-        } else {
-          // reject (new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-          // For some reason, when homekit makes this call and it fails, Homebridge crashes.  So we will simply return zero.
-          this.log.warn(`Failed to get status for ${this.name}`);
-          resolve(0);
-        }
-      });
-    });
+    const temperature = await this.statusValue<number>('temperatureMeasurement', 'temperature');
+    const unit = this.deviceStatus.status?.temperatureMeasurement?.temperature?.unit;
+    if (!Number.isFinite(temperature) || (unit !== 'F' && unit !== 'C')) {
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+    this.units = unit;
+    return unit === 'F' ? (temperature - 32) * (5 / 9) : temperature;
   }
 
   // TARGET TEMP
@@ -283,6 +205,10 @@ export class ThermostatService extends BaseService {
       }
       this.targetHeatingCoolingState = value;
       this.service.updateCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState, value);
+      const current = event.value === 'heat' ? this.platform.Characteristic.CurrentHeatingCoolingState.HEAT :
+        event.value === 'cool' ? this.platform.Characteristic.CurrentHeatingCoolingState.COOL :
+          this.platform.Characteristic.CurrentHeatingCoolingState.OFF;
+      this.service.updateCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState, current);
       const cooling = value === this.platform.Characteristic.TargetHeatingCoolingState.COOL;
       const capability = cooling ? 'thermostatCoolingSetpoint' : 'thermostatHeatingSetpoint';
       const attribute = cooling ? 'coolingSetpoint' : 'heatingSetpoint';

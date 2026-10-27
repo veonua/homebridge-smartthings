@@ -24,20 +24,8 @@ export class ValveService extends BaseService {
 
   // Return the current target state
   async getValveState(): Promise<number> {
-    // If it has been more than 10 seconds since we've sent a transition command,
-    // reset the target state to the current state.
-
-    return new Promise((resolve, reject) => {
-      this.getStatus().then(success => {
-        if (!success) {
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-          return;
-        }
-        const valveState = this.deviceStatus.status.valve.valve.value;
-        this.log.debug(`Received valve value of ${valveState} from Smartthings`);
-        resolve(valveState === 'open' ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE);
-      });
-    });
+    const state = await this.statusValue<string>('valve', 'valve');
+    return state === 'open' ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE;
   }
 
   // Set the target state of the valve

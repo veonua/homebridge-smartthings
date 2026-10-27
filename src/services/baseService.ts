@@ -72,20 +72,21 @@ export class BaseService {
   }
 
   protected async getStatus(): Promise<boolean> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    // this.log.debug('Received getMotion() event for ' + this.name);
+    try {
+      return await this.multiServiceAccessory.ensureOnline() && await this.multiServiceAccessory.refreshStatus();
+    } catch {
+      return false;
+    }
+  }
 
-    return new Promise((resolve) => {
-      this.multiServiceAccessory.ensureOnline().then(online => online && this.multiServiceAccessory.refreshStatus())
-        .then(success => {
-          if (!success) {
-            resolve(false);
-          } else {
-            resolve(true);
-          }
-        });
-    });
+  protected async statusValue<T>(capability: string, attribute: string): Promise<T> {
+    if (await this.getStatus()) {
+      const value = this.deviceStatus.status?.[capability]?.[attribute]?.value;
+      if (value !== undefined && value !== null) {
+        return value as T;
+      }
+    }
+    throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   }
 
   public processEvent(event: ShortEvent) {

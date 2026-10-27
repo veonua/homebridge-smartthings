@@ -38,26 +38,12 @@ export class LockService extends BaseService {
 
   // Return the current target state
   async getLockTargetState(): Promise<number> {
-    // If it has been more than 10 seconds since we've sent a transition command,
-    // reset the target state to the current state.
-
     if (Date.now() - this.lockInTransitionStart > 10000) {
-      return new Promise((resolve, reject) => {
-        this.getStatus().then(success => {
-          if (!success) {
-            reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-            return;
-          }
-          this.targetState = this.deviceStatus.status.lock.lock.value === 'locked' ?
-            this.platform.Characteristic.LockTargetState.SECURED :
-            this.platform.Characteristic.LockTargetState.UNSECURED;
-          this.log.debug(`Reset ${this.name} to ${this.targetState}`);
-          resolve(this.targetState);
-        });
-      });
-    } else {
-      return this.targetState;
+      const state = await this.statusValue<string>('lock', 'lock');
+      this.targetState = state === 'locked' ? this.platform.Characteristic.LockTargetState.SECURED :
+        this.platform.Characteristic.LockTargetState.UNSECURED;
     }
+    return this.targetState;
   }
 
   // Set the target state of the lock
@@ -71,21 +57,7 @@ export class LockService extends BaseService {
 
   // Get the current state of the lock
   async getLockCurrentState(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    this.log.debug('Received getLockState() event for ' + this.name);
-
-    return new Promise((resolve, reject) => {
-      this.getStatus().then(success => {
-        if (success) {
-          const lockState = this.deviceStatus.status.lock.lock.value;
-          this.log.debug(`LockState value from ${this.name}: ${lockState}`);
-          resolve(this.mapLockState(lockState));
-        } else {
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    return this.mapLockState(await this.statusValue<string>('lock', 'lock'));
   }
 
   public processEvent(event: ShortEvent): void {

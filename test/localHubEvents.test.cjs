@@ -298,6 +298,56 @@ test('concurrent clients share one created subscription', async t => {
   await second.stop();
 });
 
+test('a verified owned subscription is replaced when locations change, without deleting the old one', async t => {
+  const f = await fixture(t);
+  f.client.start();
+  await until(() => f.observed.connected === 1, 'initial connection');
+  await f.client.stop();
+  const old = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
+  const changedLocation = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff';
+  let connected = false;
+  const errors = [];
+  const next = new LocalHubEvents({ tokenFile: f.tokenFile, subscriptionFile: f.subscriptionFile,
+    locationIds: [location, changedLocation], onConnected: () => { connected = true; }, onDisconnected: () => {},
+    onDeviceEvent: () => {}, onError: code => { errors.push(code); } });
+  t.after(() => next.stop());
+  next.start();
+  await until(() => connected || errors.length, 'connection with changed locations');
+  assert.deepEqual(errors, []);
+  assert.equal(connected, true);
+  assert.equal(f.hub.posts, 2);
+  assert.equal(f.hub.deletes, 0);
+  const current = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
+  assert.deepEqual(current.locationIds.sort(), [location, changedLocation].sort());
+  assert.notEqual(current.subscriptionId, old.subscriptionId);
+  const archive = JSON.parse(await fs.readFile(path.join(path.dirname(f.subscriptionFile), `previous-${old.subscriptionId}.json`), 'utf8'));
+  assert.deepEqual(archive, old);
+  assert.equal(f.hub.subscriptions.size, 2);
+  await next.stop();
+});
+
+test('a changed external subscription is never replaced or deleted automatically', async t => {
+  const f = await fixture(t);
+  const id = crypto.randomUUID();
+  const name = 'External logger';
+  await fs.writeFile(f.subscriptionFile, JSON.stringify({ version: 1, hubId, locationIds: [location],
+    name, ownership: 'external', stage: 'ready', subscriptionId: id }), { mode: 0o600 });
+  f.hub.subscriptions.set(id, { subscriptionId: id, name, registrationUrl: `/push/${id}`,
+    subscriptionFilters: [{ type: 'LOCATIONIDS', value: [location] }] });
+  const errors = [];
+  const next = new LocalHubEvents({ tokenFile: f.tokenFile, subscriptionFile: f.subscriptionFile,
+    locationIds: [location, 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'], onConnected: () => {}, onDisconnected: () => {},
+    onDeviceEvent: () => {}, onError: code => { errors.push(code); } });
+  t.after(() => next.stop());
+  next.start();
+  await until(() => errors.length, 'external filter changed');
+  assert.deepEqual(errors, ['ExternalSubscriptionFilterChanged']);
+  assert.equal(f.hub.posts, 0);
+  assert.equal(f.hub.deletes, 0);
+  assert.equal(JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8')).subscriptionId, id);
+  await next.stop();
+});
+
 test('subscription with mismatched owner or filter is never removed', async t => {
   const f = await fixture(t);
   f.client.start();

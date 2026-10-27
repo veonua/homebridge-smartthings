@@ -146,14 +146,17 @@ export class MultiServiceAccessory {
     },
     {
       capabilities: ['switch', 'switchLevel'],
+      optionalCapabilities: ['colorControl', 'colorTemperature'],
       service: LightService,
     },
     {
       capabilities: ['switch', 'colorControl'],
+      optionalCapabilities: ['colorTemperature'],
       service: LightService,
     },
     {
       capabilities: ['switch', 'colorTemperature'],
+      optionalCapabilities: ['colorControl'],
       service: LightService,
     },
     {
@@ -356,12 +359,8 @@ export class MultiServiceAccessory {
           if (!componentStatus || typeof componentStatus !== 'object') {
             return false;
           }
-          return component.capabilities.every(capability => capability === 'button' ||
-            (STATUS_ATTRIBUTES[capability] || []).every(attribute => {
-            const value = (componentStatus as any)[capability]?.[attribute];
-            return value && value.value !== null && value.value !== undefined &&
-              (capability !== 'temperatureMeasurement' || (value.unit !== null && value.unit !== undefined));
-          }));
+          // Unavailable attributes are handled by their individual characteristics.
+          return !Array.isArray(componentStatus);
         }),
       );
       const componentsStatus = status.components;
