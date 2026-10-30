@@ -11,16 +11,17 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_BYTES = 1024 * 1024;
 const TIMEOUT = 15000;
 const CHECK_CREDENTIALS_MS = 30000;
-const ROTATION_INTERVAL_MS = 4 * 60 * 60 * 1000;
+const ROTATION_INTERVAL_MS = 60 * 1000;
 const FORBIDDEN_RECHECK_MS = 30000;
-const MAX_UNRESOLVED_ARCHIVES = 6;
 const KNOWN_ERRORS = new Set([
   'CertificateHostnameMismatch', 'CertificateVerificationFailed', 'ConnectionClosed', 'ConnectionFailed', 'ConnectionTimeout',
   'CredentialReadFailed', 'ExternalSubscriptionMissing', 'ExternalSubscriptionFilterChanged', 'HubTokenExpired',
   'InvalidCertificate', 'InvalidCredentials',
   'InvalidEventStream', 'InvalidRegistrationUrl', 'RequestFailed', 'RequestTimeout', 'ResponseTooLarge', 'Stopped',
   'StreamFailed', 'StreamRejected', 'StreamTimeout', 'SubscriptionCreationUnknown', 'SubscriptionLockBusy',
-  'SubscriptionLockUnavailable', 'SubscriptionLookupFailed', 'SubscriptionMismatch', 'SubscriptionRotationLimited',
+  'SubscriptionLockUnavailable', 'SubscriptionLookupFailed', 'SubscriptionMismatch', 'SubscriptionFilterUpdateFailed',
+  'SubscriptionRotationLimited_TimeUnknown', 'SubscriptionRotationLimited_InvalidTime',
+  'SubscriptionRotationLimited_Cooldown',
   'SubscriptionStateInvalid',
   'SubscriptionStateWriteFailed', 'UnsafePrivateFile', 'UnsafeStateDirectory',
 ]);
@@ -31,6 +32,25 @@ const SAFE_SYSTEM_ERRORS = new Set([
   'ERR_STREAM_DESTROYED',
 ]);
 type EventStage = 'credentials' | 'connection' | 'subscription' | 'stream';
+
+const ERROR_DESCRIPTIONS: Record<string, string> = {
+  SubscriptionLookupFailed: 'Could not verify the saved subscription with the hub; the plugin will retry. ' +
+    'HTTP 403 does not prove the subscription was deleted.',
+  SubscriptionCreationUnknown: 'The outcome of creating a subscription is unknown; automatic creation is paused ' +
+    'to avoid duplicates. Inspect the saved subscription state.',
+  SubscriptionRotationLimited_TimeUnknown: 'Cannot determine when the previous subscription was created; ' +
+    'automatic replacement is paused. Inspect the saved subscription state.',
+  SubscriptionRotationLimited_InvalidTime: 'The saved subscription creation time is invalid or in the future; ' +
+    'automatic replacement is paused. Check the system clock and saved subscription state.',
+  SubscriptionRotationLimited_Cooldown: 'A subscription was created recently; ' +
+    'the plugin will wait at least one minute before replacing it again.',
+  SubscriptionFilterUpdateFailed: 'Could not update the existing subscription filter; the plugin will retry.',
+};
+
+export function describeLocalHubEventsError(code: string): string {
+  const description = ERROR_DESCRIPTIONS[code];
+  return description ? `${code}: ${description}` : code;
+}
 
 class RequestNotSentError extends Error {
   readonly code = 'ERR_HTTP2_INVALID_SESSION';
@@ -83,6 +103,7 @@ export interface LocalHubEventsOptions {
   onDisconnected: () => void;
   onDeviceEvent: (event: LocalDeviceEvent) => void;
   onError: (code: string) => void;
+  onInfo?: (message: string) => void;
 }
 
 type Message = { event: string; data: string; id?: string };
@@ -267,6 +288,7 @@ export class LocalHubEvents {
   private readonly locations: string[];
   private stopped = true;
   private creating = false;
+  private replacements = 0;
   private reconnectRequested = false;
   private session: ClientHttp2Session | undefined;
   private stream: ClientHttp2Stream | undefined;
@@ -570,6 +592,7 @@ export class LocalHubEvents {
     const file = this.options.subscriptionFile;
     let saved = await this.readState(c);
     let previous: Stored | undefined;
+    let previousStatus: number | undefined;
     let locationsChanged = false;
     if (saved?.stage === 'pending') {
       throw new Error('SubscriptionCreationUnknown');
@@ -593,16 +616,23 @@ export class LocalHubEvents {
         if (saved.ownership === 'external') {
           throw new Error('ExternalSubscriptionFilterChanged');
         }
+        const updated = await this.json(session, c, 'PUT', `/subscriptions/${saved.subscriptionId}`, {
+          subscriptionFilters: [{ type: 'LOCATIONIDS', value: this.locations }],
+        });
+        if (updated.status !== 200) {
+          throw new Error('SubscriptionFilterUpdateFailed');
+        }
+        const changed = { ...saved, locationIds: this.locations };
+        const updatedRegistration = this.verifySubscription(updated.data, changed, originOf(c));
+        await saveState(file, changed, false);
+        return updatedRegistration;
       }
       if (saved.ownership === 'external' && !locationsChanged) {
         this.forbidden = undefined;
         throw new Error(reply.status === 404 ? 'ExternalSubscriptionMissing' : 'SubscriptionLookupFailed');
       }
       const credentialHash = `${c.hubId}:${c.hubHost}:${c.hubPort ?? 8766}:${idHash(c)}`;
-      if (locationsChanged) {
-        // The owned subscription was verified, but it cannot cover the new filter.
-        // Keep it archived and create a replacement without deleting the old one.
-      } else if (reply.status === 403) {
+      if (reply.status === 403) {
         const now = Date.now();
         if (!this.forbidden || this.forbidden.subscriptionId !== saved.subscriptionId ||
           this.forbidden.credentials !== credentialHash || now < this.forbidden.firstSeen) {
@@ -634,36 +664,19 @@ export class LocalHubEvents {
         try {
           latestCreation = (await fs.stat(file)).mtimeMs;
         } catch {
-          throw new Error('SubscriptionRotationLimited');
+          throw new Error('SubscriptionRotationLimited_TimeUnknown');
         }
       }
-      if (!Number.isFinite(latestCreation) || latestCreation < 0 || now < latestCreation ||
-        (!locationsChanged && now - latestCreation < ROTATION_INTERVAL_MS)) {
-        throw new Error('SubscriptionRotationLimited');
+      if (!Number.isFinite(latestCreation) || latestCreation < 0 || now < latestCreation) {
+        throw new Error('SubscriptionRotationLimited_InvalidTime');
       }
-      const archiveName = `previous-${saved.subscriptionId}.json`;
-      const archives = (await fs.readdir(path.dirname(file))).filter(name => /^previous-[0-9a-f-]{36}\.json$/i.test(name));
-      if (archives.length > MAX_UNRESOLVED_ARCHIVES ||
-        (archives.length === MAX_UNRESOLVED_ARCHIVES && !archives.includes(archiveName))) {
-        throw new Error('SubscriptionRotationLimited');
-      }
-      // Keep the previous subscription before atomically replacing ready with
-      // pending; 403 and 404 are both insufficient grounds to delete it.
-      const archivePath = path.join(path.dirname(file), archiveName);
-      try {
-        await saveState(archivePath, saved, true);
-      } catch (error: any) {
-        if (error.code !== 'EEXIST') {
-          throw new Error('SubscriptionStateWriteFailed');
-        }
-        const archived = await readPrivate(archivePath);
-        if (JSON.stringify(archived) !== JSON.stringify(saved)) {
-          throw new Error('SubscriptionStateInvalid');
-        }
+      if (now - latestCreation < ROTATION_INTERVAL_MS) {
+        throw new Error('SubscriptionRotationLimited_Cooldown');
       }
       previous = saved;
+      previousStatus = reply.status;
       saved = { version: 1, hubId: c.hubId, locationIds: this.locations, name: `Homebridge local events ${randomUUID()}`,
-        stage: 'pending', reason: 'AwaitingPostOutcome', previousArchive: archiveName,
+        stage: 'pending', reason: 'AwaitingPostOutcome',
         ...(previous.lastRotationAt !== undefined ? { lastRotationAt: previous.lastRotationAt } : {}) };
       await saveState(file, saved, false);
       this.forbidden = undefined;
@@ -712,6 +725,11 @@ export class LocalHubEvents {
         if (this.stopped || this.reconnectRequested || current.hubId !== c.hubId || current.hubHost !== c.hubHost ||
           (current.hubPort ?? 8766) !== (c.hubPort ?? 8766) || idHash(current) !== idHash(c)) {
           throw new RequestNotSentError();
+        }
+        if (previous) {
+          try {
+            this.options.onInfo?.(`Saved local event subscription is unavailable (hub HTTP ${previousStatus}); creating a replacement.`);
+          } catch { /* Ignore callback failures. */ }
         }
         reply = await this.json(session, c, 'POST', '/subscriptions', {
           name: saved.name, version: 1, subscriptionFilters: [{ type: 'LOCATIONIDS', value: this.locations }],
@@ -780,6 +798,13 @@ export class LocalHubEvents {
       try {
         const registration = registrationPath(reply.data.registrationUrl, originOf(c));
         await saveState(file, ready, false);
+        if (previous) {
+          this.replacements++;
+          try {
+            this.options.onInfo?.(`Replacement subscription created (hub HTTP ${previousStatus}); ` +
+              `successful replacements since plugin start: ${this.replacements}.`);
+          } catch { /* Ignore callback failures. */ }
+        }
         return registration;
       } catch {
         try {

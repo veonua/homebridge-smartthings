@@ -5,7 +5,7 @@ import axios = require('axios');
 //import { BasePlatformAccessory } from './basePlatformAccessory';
 import { MultiServiceAccessory } from './multiServiceAccessory';
 import { LocalHubClient, LocalHubCommand } from './localHubClient';
-import { LocalHubEvents, LocalDeviceEvent } from './localHubEvents';
+import { LocalHubEvents, LocalDeviceEvent, describeLocalHubEventsError } from './localHubEvents';
 import { HubTokenManager } from './hubTokenManager';
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
@@ -184,7 +184,8 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
           this.log.warn('Local SmartThings SSE disconnected; waiting for reconnect');
         },
         onDeviceEvent: event => this.processLocalEvent(event),
-        onError: code => this.log.warn(`Local SmartThings SSE: ${code}`),
+        onInfo: message => this.log.info(`Local SmartThings SSE: ${message}`),
+        onError: code => this.log.warn(`Local SmartThings SSE: ${describeLocalHubEventsError(code)}`),
       });
       this.localEvents.start();
     } catch (error) {

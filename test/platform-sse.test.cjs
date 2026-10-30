@@ -3,6 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { IKHomeBridgeHomebridgePlatform } = require('../dist/platform');
+const { LocalHubEvents } = require('../dist/localHubEvents');
 
 function fixture(overrides = {}) {
   const api = new EventEmitter();
@@ -16,6 +17,26 @@ function fixture(overrides = {}) {
   return { platform, api, messages };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+
+test('subscription recovery warnings explain the specific plugin safeguard', t => {
+  const { platform, messages } = fixture();
+  let report;
+  t.mock.method(LocalHubEvents.prototype, 'start', function () { report = this.options.onError; });
+  platform.connectLocalEvents([{ deviceId: 'device', locationId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' }]);
+  report('SubscriptionRotationLimited_Cooldown');
+  report('SubscriptionRotationLimited_InvalidTime');
+  report('SubscriptionRotationLimited_TimeUnknown');
+  report('SubscriptionLookupFailed');
+  report('SubscriptionCreationUnknown');
+  report('StreamFailed');
+  const warnings = messages.filter(([level]) => level === 'warn').map(([, text]) => text);
+  assert.match(warnings[0], /at least one minute/);
+  assert.match(warnings[1], /invalid or in the future/);
+  assert.match(warnings[2], /Cannot determine when/);
+  assert.match(warnings[3], /403 does not prove/);
+  assert.match(warnings[4], /outcome.*unknown.*avoid duplicates/);
+  assert.match(warnings[5], /StreamFailed$/);
+});
 
 test('local event passes exact payload to the accessory and logs the first applied event once', () => {
   const { platform, messages } = fixture();

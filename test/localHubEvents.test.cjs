@@ -49,7 +49,7 @@ async function fixture(t, mode = 'normal') {
   const wrong = cert(dir, 'wrong');
   const pem = await fs.readFile(trusted.pem, 'utf8');
   const serverCert = mode === 'fingerprint' ? await signedCert(dir, trusted) : trusted;
-  const hub = { posts: 0, lookups: 0, deletes: 0, streams: 0, tokens: [], subscriptions: new Map() };
+  const hub = { posts: 0, puts: 0, lookups: 0, deletes: 0, streams: 0, tokens: [], subscriptions: new Map() };
   const server = http2.createSecureServer({ key: await fs.readFile(serverCert.key), cert: await fs.readFile(serverCert.pem) });
   server.on('sessionError', () => {});
   server.on('tlsClientError', () => {});
@@ -84,6 +84,17 @@ async function fixture(t, mode = 'normal') {
         if (mode === 'dropped') { stream.destroy(); return; }
         if (mode === 'status-400') { hub.subscriptions.delete(id); json(400, { error: 'private details' }); return; }
         if (mode === 'mismatch-create') { json(200, { ...sub, name: 'different name' }); return; }
+        json(200, sub);
+      });
+    } else if (method === 'PUT' && url.startsWith('/subscriptions/')) {
+      hub.puts++;
+      let content = '';
+      stream.on('data', chunk => { content += chunk; });
+      stream.on('end', () => {
+        const sub = hub.subscriptions.get(url.split('/').pop());
+        if (!sub) { json(404, {}); return; }
+        if (mode === 'filter-failed') { json(500, {}); return; }
+        sub.subscriptionFilters = JSON.parse(content).subscriptionFilters;
         json(200, sub);
       });
     } else if (method === 'GET' && url.startsWith('/subscriptions/')) {
@@ -298,7 +309,7 @@ test('concurrent clients share one created subscription', async t => {
   await second.stop();
 });
 
-test('a verified owned subscription is replaced when locations change, without deleting the old one', async t => {
+test('a verified owned subscription updates its filter when locations change', async t => {
   const f = await fixture(t);
   f.client.start();
   await until(() => f.observed.connected === 1, 'initial connection');
@@ -315,15 +326,32 @@ test('a verified owned subscription is replaced when locations change, without d
   await until(() => connected || errors.length, 'connection with changed locations');
   assert.deepEqual(errors, []);
   assert.equal(connected, true);
-  assert.equal(f.hub.posts, 2);
+  assert.equal(f.hub.posts, 1);
+  assert.equal(f.hub.puts, 1);
   assert.equal(f.hub.deletes, 0);
   const current = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
   assert.deepEqual(current.locationIds.sort(), [location, changedLocation].sort());
-  assert.notEqual(current.subscriptionId, old.subscriptionId);
-  const archive = JSON.parse(await fs.readFile(path.join(path.dirname(f.subscriptionFile), `previous-${old.subscriptionId}.json`), 'utf8'));
-  assert.deepEqual(archive, old);
-  assert.equal(f.hub.subscriptions.size, 2);
+  assert.equal(current.subscriptionId, old.subscriptionId);
+  assert.equal(f.hub.subscriptions.size, 1);
   await next.stop();
+});
+
+test('a failed filter update does not create another subscription', async t => {
+  const f = await fixture(t, 'filter-failed');
+  f.client.start();
+  await until(() => f.observed.connected === 1, 'initial connection');
+  await f.client.stop();
+  const old = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
+  const errors = [];
+  const next = new LocalHubEvents({ tokenFile: f.tokenFile, subscriptionFile: f.subscriptionFile,
+    locationIds: [location, 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'], onConnected: () => {}, onDisconnected: () => {},
+    onDeviceEvent: () => {}, onError: code => errors.push(code) });
+  t.after(() => next.stop());
+  next.start();
+  await until(() => errors.includes('SubscriptionFilterUpdateFailed'), 'failed filter update');
+  assert.equal(f.hub.posts, 1);
+  assert.equal(f.hub.subscriptions.size, 1);
+  assert.deepEqual(JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8')), old);
 });
 
 test('a changed external subscription is never replaced or deleted automatically', async t => {
@@ -500,8 +528,7 @@ async function rotationFixture(t, options = {}) {
     if (method === 'POST') {
       const pending = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
       assert.equal(pending.stage, 'pending', 'pending must be durable before POST');
-      const previous = JSON.parse(await fs.readFile(path.join(path.dirname(f.subscriptionFile), pending.previousArchive), 'utf8'));
-      assert.deepEqual(previous, old, 'previous subscription must be archived before POST');
+      assert.equal(pending.previousArchive, undefined, 'replacement must not create an archive');
       if (options.dropPost) throw Error('RequestTimeout');
       const id = crypto.randomUUID();
       return { status: 200, data: { ...body, subscriptionId: id, registrationUrl: `/push/${id}` } };
@@ -515,7 +542,7 @@ async function firstForbidden(f) {
 }
 function ageForbidden(f) { f.client.forbidden.firstSeen -= 31000; }
 
-test('two 403s rotate an owned subscription once with a durable archive and pending marker', async t => {
+test('two 403s replace an owned subscription once with a durable pending marker', async t => {
   const f = await rotationFixture(t);
   await firstForbidden(f);
   await assert.rejects(f.client.subscriptionLocked({}, f.credentials), /SubscriptionLookupFailed/);
@@ -528,13 +555,11 @@ test('two 403s rotate an owned subscription once with a durable archive and pend
   assert.ok(Number.isSafeInteger(state.lastRotationAt));
   assert.equal(f.calls.filter(c => c.method === 'POST').length, 1);
   assert.equal(f.calls.filter(c => c.method === 'DELETE').length, 0);
-  const archive = path.join(path.dirname(f.subscriptionFile), `previous-${f.old.subscriptionId}.json`);
-  assert.equal((await fs.stat(archive)).mode & 0o077, 0);
-  assert.deepEqual(JSON.parse(await fs.readFile(archive, 'utf8')), f.old);
+  assert.deepEqual((await fs.readdir(path.dirname(f.subscriptionFile))).filter(x => x.startsWith('previous-')), []);
   f.client.forbidden = undefined;
   await firstForbidden(f);
   ageForbidden(f);
-  await assert.rejects(f.client.subscriptionLocked({}, f.credentials), /SubscriptionRotationLimited/);
+  await assert.rejects(f.client.subscriptionLocked({}, f.credentials), /SubscriptionRotationLimited_Cooldown/);
   assert.equal(f.calls.filter(c => c.method === 'POST').length, 1, 'rotation limit persists in ready state');
 });
 
@@ -546,7 +571,7 @@ test('ambiguous rotation POST retains pending and never retries', async t => {
   const pending = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
   assert.equal(pending.stage, 'pending');
   assert.equal(pending.reason, 'RequestTimeout');
-  assert.equal(pending.previousArchive, `previous-${f.old.subscriptionId}.json`);
+  assert.equal(pending.previousArchive, undefined);
   await assert.rejects(f.client.subscriptionLocked({}, f.credentials), /SubscriptionCreationUnknown/);
   assert.equal(f.calls.filter(c => c.method === 'POST').length, 1);
   assert.equal(f.calls.filter(c => c.method === 'DELETE').length, 0);
@@ -583,7 +608,8 @@ test('a recent or future rotation marker blocks a new POST across restart', asyn
     const f = await rotationFixture(t, { lastRotationAt: timestamp });
     await firstForbidden(f);
     ageForbidden(f);
-    await assert.rejects(f.client.subscriptionLocked({}, f.credentials), /SubscriptionRotationLimited/);
+    const expected = timestamp > Date.now() ? /SubscriptionRotationLimited_InvalidTime/ : /SubscriptionRotationLimited_Cooldown/;
+    await assert.rejects(f.client.subscriptionLocked({}, f.credentials), expected);
     assert.equal(f.calls.filter(c => c.method === 'POST').length, 0);
   }
 });
@@ -593,20 +619,27 @@ test('a legacy state with a recent or future mtime blocks rotation', async t => 
     const f = await rotationFixture(t, { mtime });
     await firstForbidden(f);
     ageForbidden(f);
-    await assert.rejects(f.client.subscriptionLocked({}, f.credentials), /SubscriptionRotationLimited/);
+    const expected = mtime > Date.now() ? /SubscriptionRotationLimited_InvalidTime/ : /SubscriptionRotationLimited_Cooldown/;
+    await assert.rejects(f.client.subscriptionLocked({}, f.credentials), expected);
     assert.equal(f.calls.filter(c => c.method === 'POST').length, 0);
     assert.deepEqual(JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8')), f.old);
   }
 });
 
-test('404 with a recent creation cannot bypass the four-hour limit', async t => {
+test('404 with a recent creation cannot bypass the one-minute cooldown', async t => {
   const f = await rotationFixture(t, { lookupStatus: 404, lastRotationAt: Date.now() - 1000 });
-  await assert.rejects(f.client.subscriptionLocked({}, f.credentials), /SubscriptionRotationLimited/);
+  await assert.rejects(f.client.subscriptionLocked({}, f.credentials), /SubscriptionRotationLimited_Cooldown/);
   assert.equal(f.calls.filter(c => c.method === 'POST').length, 0);
   assert.deepEqual(JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8')), f.old);
 });
 
-test('404 for an old owned subscription archives it and persists pending before one POST', async t => {
+test('replacement is allowed once the one-minute cooldown expires', async t => {
+  const f = await rotationFixture(t, { lookupStatus: 404, lastRotationAt: Date.now() - 120000 });
+  assert.match(await f.client.subscriptionLocked({}, f.credentials), /^\/push\//);
+  assert.equal(f.calls.filter(c => c.method === 'POST').length, 1);
+});
+
+test('404 for an old owned subscription persists pending before one POST', async t => {
   const f = await rotationFixture(t, { lookupStatus: 404 });
   assert.match(await f.client.subscriptionLocked({}, f.credentials), /^\/push\//);
   const ready = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
@@ -651,44 +684,34 @@ test('credential change after initial pending safely removes the unsent marker',
   assert.equal(f.hub.posts, 0);
 });
 
-test('six unresolved archives block any new replacement', async t => {
+test('existing archive records do not block replacement or create new archives', async t => {
   for (const lookupStatus of [403, 404]) {
     const f = await rotationFixture(t, { lookupStatus });
+    const directory = path.dirname(f.subscriptionFile);
     for (let i = 0; i < 6; i++) {
-      await fs.writeFile(path.join(path.dirname(f.subscriptionFile), `previous-${crypto.randomUUID()}.json`), '{}', { mode: 0o600 });
+      await fs.writeFile(path.join(directory, `previous-${crypto.randomUUID()}.json`), '{}', { mode: 0o600 });
     }
-    if (lookupStatus === 403) {
-      await firstForbidden(f);
-      ageForbidden(f);
-    }
-    await assert.rejects(f.client.subscriptionLocked({}, f.credentials), /SubscriptionRotationLimited/);
-    assert.deepEqual(JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8')), f.old);
-    assert.equal(f.calls.filter(c => c.method === 'POST').length, 0);
+    const before = (await fs.readdir(directory)).filter(x => x.startsWith('previous-')).sort();
+    const info = [];
+    f.client.options.onInfo = message => info.push(message);
+    if (lookupStatus === 403) { await firstForbidden(f); ageForbidden(f); }
+    assert.match(await f.client.subscriptionLocked({}, f.credentials), /^\/push\//);
+    assert.equal(f.calls.filter(c => c.method === 'POST').length, 1);
+    assert.deepEqual((await fs.readdir(directory)).filter(x => x.startsWith('previous-')).sort(), before);
+    assert.match(info[0], new RegExp(`unavailable \\(hub HTTP ${lookupStatus}\\); creating a replacement`));
+    assert.match(info[1], new RegExp(`created \\(hub HTTP ${lookupStatus}\\); successful replacements since plugin start: 1`));
   }
 });
 
-test('an already verified archive can be reused at the archive limit', async t => {
+test('replacement count in logs reflects successful replacements during the current plugin run', async t => {
   const f = await rotationFixture(t, { lookupStatus: 404 });
-  const directory = path.dirname(f.subscriptionFile);
-  const existing = path.join(directory, `previous-${f.old.subscriptionId}.json`);
-  await fs.writeFile(existing, JSON.stringify(f.old), { mode: 0o600 });
-  for (let i = 0; i < 5; i++) {
-    await fs.writeFile(path.join(directory, `previous-${crypto.randomUUID()}.json`), '{}', { mode: 0o600 });
-  }
-  assert.match(await f.client.subscriptionLocked({}, f.credentials), /^\/push\//);
-  assert.equal(f.calls.filter(c => c.method === 'POST').length, 1);
-  assert.deepEqual(JSON.parse(await fs.readFile(existing, 'utf8')), f.old);
-  assert.equal((await fs.readdir(directory)).filter(x => x.startsWith('previous-')).length, 6);
-});
-
-test('an archive at the limit cannot be reused when content differs', async t => {
-  const f = await rotationFixture(t, { lookupStatus: 404 });
-  const directory = path.dirname(f.subscriptionFile);
-  await fs.writeFile(path.join(directory, `previous-${f.old.subscriptionId}.json`), '{}', { mode: 0o600 });
-  for (let i = 0; i < 5; i++) {
-    await fs.writeFile(path.join(directory, `previous-${crypto.randomUUID()}.json`), '{}', { mode: 0o600 });
-  }
-  await assert.rejects(f.client.subscriptionLocked({}, f.credentials), /SubscriptionStateInvalid/);
-  assert.equal(f.calls.filter(c => c.method === 'POST').length, 0);
-  assert.deepEqual(JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8')), f.old);
+  const info = [];
+  f.client.options.onInfo = message => info.push(message);
+  await f.client.subscriptionLocked({}, f.credentials);
+  const state = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
+  state.lastRotationAt = Date.now() - 120000;
+  await fs.writeFile(f.subscriptionFile, JSON.stringify(state), { mode: 0o600 });
+  await f.client.subscriptionLocked({}, f.credentials);
+  assert.match(info[1], /successful replacements since plugin start: 1/);
+  assert.match(info[3], /successful replacements since plugin start: 2/);
 });
