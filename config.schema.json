@@ -53,6 +53,12 @@
           "type": "string"
         }
       },
+      "AdaptiveLightingDevices": {
+        "title": "Apple Adaptive Lighting Devices",
+        "description": "Names or IDs of locally controlled tunable-white lights. Requires local hub events and a local hub token.",
+        "type": "array",
+        "items": { "title": "Device Name or ID", "type": "string" }
+      },
       "ExposeHumiditySensorForAirConditioners": {
         "title": "Expose humidity Sensor for air Conditioners if available.",
         "type": "boolean",

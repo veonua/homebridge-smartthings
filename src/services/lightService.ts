@@ -3,10 +3,15 @@ import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 import { ShortEvent } from '../shortEvent';
+import { Command } from './smartThingsCommand';
 
 export class LightService extends BaseService {
 
   private colorTemperatureRange?: { minimum: number; maximum: number };
+  private adaptiveLighting?: InstanceType<IKHomeBridgeHomebridgePlatform['api']['hap']['AdaptiveLightingController']>;
+  private pendingAdaptive?: { mired: number; time: number };
+  private expectedAdaptive?: { kelvin: number; time: number };
+  private adaptiveWriteInProgress = false;
 
   // There is a device that can't handle sethue and setsaturation separately and requires both
   // args using setcolor.
@@ -68,6 +73,19 @@ export class LightService extends BaseService {
       void this.getSaturation().catch(() => this.log.debug(`Initial saturation unavailable for ${this.name}`));
     }
 
+    const selected = Array.isArray(platform.config.AdaptiveLightingDevices) &&
+      platform.config.AdaptiveLightingDevices.some((entry: unknown) => typeof entry === 'string' &&
+        [accessory.UUID, name].some(value => value?.toLowerCase() === entry.trim().toLowerCase()));
+    // Start with explicitly selected tunable-white devices with local event feedback.
+    if (selected && componentId === 'main' && capabilities.includes('switchLevel') &&
+      capabilities.includes('colorTemperature') && !capabilities.includes('colorControl') &&
+      platform.config.LocalHubEvents === true && platform.config.LocalHubTokenFile) {
+      this.adaptiveLighting = new platform.api.hap.AdaptiveLightingController(
+        this.service as InstanceType<typeof platform.Service.Lightbulb>,
+      );
+      accessory.configureController(this.adaptiveLighting);
+    }
+
   }
 
 
@@ -90,9 +108,15 @@ export class LightService extends BaseService {
     return this.statusValue<number>('switchLevel', 'level');
   }
 
-  async setColorTemp(value: CharacteristicValue): Promise<void> {
+  async setColorTemp(value: CharacteristicValue, context?: { controller?: unknown }): Promise<void> {
     if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+    const adaptive = this.adaptiveLighting && context?.controller === this.adaptiveLighting;
+    if (adaptive) {
+      this.pendingAdaptive = { mired: value, time: Date.now() };
+      await this.applyAdaptiveTemperature();
+      return;
     }
     // Device status is loaded asynchronously; try to obtain the range before the first write.
     if (!this.colorTemperatureRange) {
@@ -104,6 +128,40 @@ export class LightService extends BaseService {
       stValue = Math.max(this.colorTemperatureRange.minimum, Math.min(this.colorTemperatureRange.maximum, stValue));
     }
     await this.sendCommandOrFail('colorTemperature', 'setColorTemperature', [stValue]);
+  }
+
+  private async applyAdaptiveTemperature(): Promise<void> {
+    const pending = this.pendingAdaptive;
+    if (this.adaptiveWriteInProgress || !pending || !this.adaptiveLighting?.isAdaptiveLightingActive() ||
+      Date.now() - pending.time > 90000 ||
+      this.deviceStatus?.status?.switch?.switch?.value !== 'on') {
+      return;
+    }
+    this.adaptiveWriteInProgress = true;
+    try {
+      const status = await this.platform.getLocalStatus(this.accessory.UUID);
+      if (status?.components?.[this.componentId]?.switch?.switch?.value !== 'on' ||
+        this.deviceStatus?.status?.switch?.switch?.value !== 'on' ||
+        !this.adaptiveLighting?.isAdaptiveLightingActive() || this.pendingAdaptive !== pending) {
+        return;
+      }
+      this.updateColorTemperatureRange();
+      let kelvin = Math.round(1000000 / pending.mired);
+      if (this.colorTemperatureRange) {
+        kelvin = Math.max(this.colorTemperatureRange.minimum, Math.min(this.colorTemperatureRange.maximum, kelvin));
+      }
+      this.expectedAdaptive = { kelvin, time: Date.now() };
+      this.pendingAdaptive = undefined;
+      const success = await this.multiServiceAccessory.sendCommands(
+        [new Command('colorTemperature', 'setColorTemperature', [kelvin], this.componentId)], undefined, true,
+      );
+      if (!success) {
+        this.expectedAdaptive = undefined;
+        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+      }
+    } finally {
+      this.adaptiveWriteInProgress = false;
+    }
   }
 
   async getColorTemp(): Promise<CharacteristicValue> {
@@ -181,6 +239,9 @@ export class LightService extends BaseService {
       case 'switch': {
         this.log.debug(`Event updating switch capability for ${this.name} to ${event.value}`);
         this.service.updateCharacteristic(this.platform.Characteristic.On, event.value === 'on');
+        if (event.value === 'on' && this.pendingAdaptive) {
+          void this.applyAdaptiveTemperature().catch(() => this.log.warn(`Adaptive Lighting command failed for ${this.name}`));
+        }
         return;
       }
 
@@ -196,6 +257,15 @@ export class LightService extends BaseService {
           return;
         }
         this.log.debug(`Event updating colorTemperature capability for ${this.name} to ${event.value}`);
+        if (this.adaptiveLighting?.isAdaptiveLightingActive() && event.eventTime !== undefined) {
+          const expected = this.expectedAdaptive;
+          const ownEvent = expected && event.eventTime >= expected.time - 1000 &&
+            Date.now() - expected.time < 15000 && Math.abs(expected.kelvin - event.value) <= 50;
+          if (!ownEvent) {
+            this.adaptiveLighting.disableAdaptiveLighting();
+            this.pendingAdaptive = undefined;
+          }
+        }
         this.updateColorTemperatureRange();
         const hbTemperature = Math.round(1000000 / event.value);
         this.service.updateCharacteristic(this.platform.Characteristic.ColorTemperature, hbTemperature);

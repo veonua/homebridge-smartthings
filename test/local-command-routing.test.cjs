@@ -46,6 +46,15 @@ test('if the hub device list is unavailable commands do not guess a route', asyn
   assert.equal(cloud, 0);
 });
 
+test('local-only commands never fall back to the cloud for an unlisted device', async () => {
+  const p = fixture(); let cloud = 0;
+  p.localDeviceIds = new Set(['local']);
+  p.localHub = { executeCommands: async () => { throw Error('unexpected local command'); } };
+  p.axInstance = { post: async () => { cloud++; } };
+  await assert.rejects(p.sendDeviceCommands('other', [{ capability: 'colorTemperature', command: 'setColorTemperature' }], true));
+  assert.equal(cloud, 0);
+});
+
 test('concurrent commands are serialized and retain the service component', async () => {
   const { MultiServiceAccessory } = require('../dist/multiServiceAccessory');
   const pending = [], sent = [];

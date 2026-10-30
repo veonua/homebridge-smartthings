@@ -431,7 +431,7 @@ export class MultiServiceAccessory {
     return this.sendCommands([cmd]);
   }
 
-  async sendCommands(commands: Command[], componentId?: string): Promise<boolean> {
+  async sendCommands(commands: Command[], componentId?: string, localOnly = false): Promise<boolean> {
     // Reserve our place before yielding so simultaneous HomeKit writes stay ordered.
     const previous = this.commandTail || Promise.resolve();
     let release: () => void = () => {};
@@ -443,7 +443,7 @@ export class MultiServiceAccessory {
     try {
       const routed = commands.map(command => componentId && !command.component
         ? { ...command, component: componentId } : command);
-      const route = await this.platform.sendDeviceCommands(this.id, routed);
+      const route = await this.platform.sendDeviceCommands(this.id, routed, localOnly);
       this.log.info(`SmartThings command accepted via ${route} for ${this.name}`);
       this.deviceStatusTimestamp = 0; // Refresh on the next explicit status request.
       return true;

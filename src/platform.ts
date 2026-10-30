@@ -557,8 +557,15 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     return !!this.localHub && (!this.localDeviceIds || this.localDeviceIds.has(deviceId));
   }
 
+  public async getLocalStatus(deviceId: string): Promise<any> {
+    if (!this.localHub) {
+      throw new Error('Local hub unavailable');
+    }
+    return this.localHub.get(`/devices/${encodeURIComponent(deviceId)}/status`);
+  }
+
   /** Route a command once; an uncertain local result is never retried in the cloud. */
-  public async sendDeviceCommands(deviceId: string, commands: LocalHubCommand[]): Promise<'local' | 'cloud'> {
+  public async sendDeviceCommands(deviceId: string, commands: LocalHubCommand[], localOnly = false): Promise<'local' | 'cloud'> {
     if (this.removedDeviceIds.has(deviceId)) {
       throw new Error('Device no longer in the SmartThings catalog');
     }
@@ -574,6 +581,9 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
           await this.localHub.executeCommands(deviceId, commands);
           return 'local';
         }
+      }
+      if (localOnly) {
+        throw new Error('Device is not available through the local hub');
       }
       // Devices not listed by the hub keep their existing cloud control until reviewed.
       await this.axInstance.post(`devices/${encodeURIComponent(deviceId)}/commands`, JSON.stringify({ commands }));
