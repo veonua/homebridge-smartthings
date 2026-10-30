@@ -16,7 +16,7 @@ const cases = [
   ['switchService', 'SwitchService', 'setSwitchState', true, ['switch', 'on', undefined]],
   ['lightService', 'LightService', 'setSwitchState', false, ['switch', 'off', undefined]],
   ['lightService', 'LightService', 'setLevel', 40, ['switchLevel', 'setLevel', [40]]],
-  ['lightService', 'LightService', 'setColorTemp', 140, ['colorTemperature', 'setColorTemperature', [6501]]],
+  ['lightService', 'LightService', 'setColorTemp', 140, ['colorTemperature', 'setColorTemperature', [7143]]],
   ['lightService', 'LightService', 'setHue', 180, ['colorControl', 'setHue', [50]]],
   ['lightService', 'LightService', 'setSaturation', 55, ['colorControl', 'setSaturation', [55]]],
   ['fanSpeedService', 'FanSpeedService', 'setSwitchState', true, ['switch', 'on', undefined]],
@@ -48,7 +48,7 @@ for (const [file, type, method, value, expected] of cases) {
     const service = makeService(file, type, (...args) => { sent.push(args); return new Promise(r => { resolveCommand = r; }); });
     let settled = false;
     const pending = service[method](value).finally(() => { settled = true; });
-    await Promise.resolve();
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(settled, false);
     assert.deepEqual(sent, [[...expected, 'secondary']]);
     resolveCommand(false);

@@ -6,6 +6,8 @@ import { ShortEvent } from '../shortEvent';
 
 export class LightService extends BaseService {
 
+  private colorTemperatureRange?: { minimum: number; maximum: number };
+
   // There is a device that can't handle sethue and setsaturation separately and requires both
   // args using setcolor.
 
@@ -89,13 +91,47 @@ export class LightService extends BaseService {
   }
 
   async setColorTemp(value: CharacteristicValue): Promise<void> {
-    const stValue = 6500 - Math.round((value as number - 140) / 360 * 6500) + 1;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+    // Device status is loaded asynchronously; try to obtain the range before the first write.
+    if (!this.colorTemperatureRange) {
+      await this.getStatus();
+    }
+    this.updateColorTemperatureRange();
+    let stValue = Math.round(1000000 / value);
+    if (this.colorTemperatureRange) {
+      stValue = Math.max(this.colorTemperatureRange.minimum, Math.min(this.colorTemperatureRange.maximum, stValue));
+    }
     await this.sendCommandOrFail('colorTemperature', 'setColorTemperature', [stValue]);
   }
 
   async getColorTemp(): Promise<CharacteristicValue> {
     const temperature = await this.statusValue<number>('colorTemperature', 'colorTemperature');
-    return 500 - ((Math.min(temperature, 6500) / 6500) * 360);
+    if (typeof temperature !== 'number' || !Number.isFinite(temperature) || temperature <= 0) {
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+    this.updateColorTemperatureRange();
+    return Math.round(1000000 / temperature);
+  }
+
+  private updateColorTemperatureRange(): void {
+    const attribute = this.deviceStatus?.status?.colorTemperature?.colorTemperatureRange;
+    const range = attribute?.value;
+    if ((attribute?.unit !== undefined && attribute.unit !== 'K') ||
+      !Number.isInteger(range?.minimum) || !Number.isInteger(range?.maximum) ||
+      range.minimum <= 0 || range.maximum < range.minimum) {
+      return;
+    }
+    if (this.colorTemperatureRange?.minimum === range.minimum && this.colorTemperatureRange?.maximum === range.maximum) {
+      return;
+    }
+    this.colorTemperatureRange = { minimum: range.minimum, maximum: range.maximum };
+    const minValue = Math.ceil(1000000 / range.maximum);
+    const maxValue = Math.floor(1000000 / range.minimum);
+    if (minValue <= maxValue) {
+      this.service.getCharacteristic(this.platform.Characteristic.ColorTemperature).setProps({ minValue, maxValue });
+    }
   }
 
   async setColor(hue: number, saturation: number): Promise<void> {
@@ -155,11 +191,13 @@ export class LightService extends BaseService {
       }
 
       case 'colorTemperature': {
+        if (event.attribute !== 'colorTemperature' || typeof event.value !== 'number' ||
+          !Number.isFinite(event.value) || event.value <= 0) {
+          return;
+        }
         this.log.debug(`Event updating colorTemperature capability for ${this.name} to ${event.value}`);
-        const stTemperature = Math.min(event.value, 6500);
-        this.log.debug('getColorTemperature() SUCCESSFUL for ' + this.name + '. value = ' + stTemperature);
-        // Convert number to the homebridge compatible value
-        const hbTemperature = 500 - ((stTemperature / 6500) * 360);
+        this.updateColorTemperatureRange();
+        const hbTemperature = Math.round(1000000 / event.value);
         this.service.updateCharacteristic(this.platform.Characteristic.ColorTemperature, hbTemperature);
         return;
       }

@@ -97,7 +97,7 @@ test('battery and color temperature handlers use event values', () => {
   const light = Object.create(LightService.prototype); light.platform = { Characteristic: characteristic }; light.service = fakeService();
   light.deviceStatus = { status: { colorTemperature: { colorTemperature: { value: 1000 } } } }; light.log = logger; light.name = 'light';
   light.processEvent(ev({ capability: 'colorTemperature', attribute: 'colorTemperature', value: 6500 }));
-  assert.deepEqual(light.service.updates, [['colorTemperature', 140]]);
+  assert.deepEqual(light.service.updates, [['colorTemperature', 154]]);
 });
 
 test('saturation rejects invalid status instead of sending null to HomeKit', async () => {
@@ -146,7 +146,7 @@ test('combined light receives hue, saturation and color temperature events', t =
   assert.equal(h.processEvent(ev({ capability: 'colorControl', attribute: 'hue', value: 50 })), true);
   assert.equal(h.processEvent(ev({ capability: 'colorControl', attribute: 'saturation', value: 55 })), true);
   assert.equal(h.processEvent(ev({ capability: 'colorTemperature', attribute: 'colorTemperature', value: 6500 })), true);
-  assert.deepEqual(light.service.updates, [['hue', 180], ['saturation', 55], ['colorTemperature', 140]]);
+  assert.deepEqual(light.service.updates, [['hue', 180], ['saturation', 55], ['colorTemperature', 154]]);
   assert.deepEqual(light.currentColor, { hue: 50, saturation: 55 });
 });
 
