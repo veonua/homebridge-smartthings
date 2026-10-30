@@ -73,13 +73,8 @@ export class LightService extends BaseService {
       void this.getSaturation().catch(() => this.log.debug(`Initial saturation unavailable for ${this.name}`));
     }
 
-    const selected = Array.isArray(platform.config.AdaptiveLightingDevices) &&
-      platform.config.AdaptiveLightingDevices.some((entry: unknown) => typeof entry === 'string' &&
-        [accessory.UUID, name].some(value => value?.toLowerCase() === entry.trim().toLowerCase()));
-    // Start with explicitly selected tunable-white devices with local event feedback.
-    if (selected && componentId === 'main' && capabilities.includes('switchLevel') &&
-      capabilities.includes('colorTemperature') && !capabilities.includes('colorControl') &&
-      platform.config.LocalHubEvents === true && platform.config.LocalHubTokenFile) {
+    if (capabilities.includes('switchLevel') && capabilities.includes('colorTemperature') &&
+      platform.config.LocalHubEvents === true && platform.config.LocalHubTokenFile && platform.usesLocalReads(accessory.UUID)) {
       this.adaptiveLighting = new platform.api.hap.AdaptiveLightingController(
         this.service as InstanceType<typeof platform.Service.Lightbulb>,
       );
@@ -113,6 +108,7 @@ export class LightService extends BaseService {
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
     const adaptive = this.adaptiveLighting && context?.controller === this.adaptiveLighting;
+    this.syncColorFromTemperature(value);
     if (adaptive) {
       this.pendingAdaptive = { mired: value, time: Date.now() };
       await this.applyAdaptiveTemperature();
@@ -128,6 +124,23 @@ export class LightService extends BaseService {
       stValue = Math.max(this.colorTemperatureRange.minimum, Math.min(this.colorTemperatureRange.maximum, stValue));
     }
     await this.sendCommandOrFail('colorTemperature', 'setColorTemperature', [stValue]);
+  }
+
+  private syncColorFromTemperature(mired: number): void {
+    if (!this.adaptiveLighting || !this.capabilities.includes('colorControl')) {
+      return;
+    }
+    const color = this.platform.api.hap.ColorUtils.colorTemperatureToHueAndSaturation(mired);
+    this.currentColor = { hue: Math.round(color.hue / 360 * 100), saturation: Math.round(color.saturation) };
+    this.service.updateCharacteristic(this.platform.Characteristic.Hue, color.hue);
+    this.service.updateCharacteristic(this.platform.Characteristic.Saturation, color.saturation);
+  }
+
+  private setColorMode(): void {
+    if (this.adaptiveLighting && this.capabilities.includes('colorTemperature')) {
+      const characteristic = this.service.getCharacteristic(this.platform.Characteristic.ColorTemperature);
+      characteristic.value = characteristic.props.minValue ?? 140;
+    }
   }
 
   private async applyAdaptiveTemperature(): Promise<void> {
@@ -205,6 +218,7 @@ export class LightService extends BaseService {
       await this.sendCommandOrFail('colorControl', 'setHue', [huePct]);
     }
     this.currentColor.hue = huePct;
+    this.setColorMode();
   }
 
   async getHue(): Promise<CharacteristicValue> {
@@ -221,6 +235,7 @@ export class LightService extends BaseService {
       await this.sendCommandOrFail('colorControl', 'setSaturation', [saturation]);
     }
     this.currentColor.saturation = saturation;
+    this.setColorMode();
   }
 
   async getSaturation(): Promise<CharacteristicValue> {
@@ -268,12 +283,28 @@ export class LightService extends BaseService {
         }
         this.updateColorTemperatureRange();
         const hbTemperature = Math.round(1000000 / event.value);
+        this.syncColorFromTemperature(hbTemperature);
         this.service.updateCharacteristic(this.platform.Characteristic.ColorTemperature, hbTemperature);
         return;
       }
 
       case 'colorControl': {
         this.log.debug(`Event for colorControl, attribute is ${event.attribute}, value is ${event.value}`);
+        if (this.adaptiveLighting?.isAdaptiveLightingActive() && event.eventTime !== undefined &&
+          (event.attribute === 'hue' || event.attribute === 'saturation')) {
+          const expected = this.expectedAdaptive;
+          const expectedColor = expected && this.platform.api.hap.ColorUtils
+            .colorTemperatureToHueAndSaturation(Math.round(1000000 / expected.kelvin));
+          const expectedValue = expectedColor && (event.attribute === 'hue' ? expectedColor.hue / 360 * 100 : expectedColor.saturation);
+          const ownEvent = expected && expectedValue !== undefined && typeof event.value === 'number' &&
+            event.eventTime >= expected.time - 1000 && Date.now() - expected.time < 15000 &&
+            Math.abs(expectedValue - event.value) <= 5;
+          if (!ownEvent) {
+            this.adaptiveLighting.disableAdaptiveLighting();
+            this.pendingAdaptive = undefined;
+            this.setColorMode();
+          }
+        }
         if (event.attribute === 'hue') {
           if (typeof event.value !== 'number' || !Number.isFinite(event.value) || event.value < 0 || event.value > 100) {
             return;

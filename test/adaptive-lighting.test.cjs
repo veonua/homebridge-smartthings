@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const hap = require(process.env.HAP_NODEJS_MODULE || '@homebridge/hap-nodejs');
 const { LightService } = require('../dist/services/lightService');
 
-function fixture({ selected = true, capabilities = ['switch', 'switchLevel', 'colorTemperature'], state = 'on' } = {}) {
+function fixture({ local = true, capabilities = ['switch', 'switchLevel', 'colorTemperature'], state = 'on' } = {}) {
   const accessory = new hap.Accessory('Test lamp', hap.uuid.generate('adaptive-test'));
   accessory.context = { device: { label: 'Test lamp', components: [{ id: 'main', capabilities: capabilities.map(id => ({ id })) }] } };
   const status = { status: { switch: { switch: { value: state } }, colorTemperature: {
@@ -12,7 +12,7 @@ function fixture({ selected = true, capabilities = ['switch', 'switchLevel', 'co
   const commands = [];
   const multi = { sendCommands: async (...args) => { commands.push(args); return true; } };
   const platform = { Service: hap.Service, Characteristic: hap.Characteristic, api: { hap },
-    config: { AdaptiveLightingDevices: selected ? ['Test lamp'] : [], LocalHubEvents: true, LocalHubTokenFile: '/local' },
+    config: { LocalHubEvents: true, LocalHubTokenFile: '/local' }, usesLocalReads: () => local,
     log: { debug() {}, info() {}, warn() {}, error() {} },
     getLocalStatus: async () => ({ components: { main: { switch: { switch: { value: status.status.switch.switch.value } } } } }),
   };
@@ -20,12 +20,30 @@ function fixture({ selected = true, capabilities = ['switch', 'switchLevel', 'co
   return { accessory, status, service, platform, commands };
 }
 
-test('adds a real HomeKit transition controller only to selected tunable-white lights', () => {
+test('adds a real HomeKit transition controller to local lights with brightness and temperature', () => {
   const f = fixture();
   assert.ok(f.service.adaptiveLighting instanceof hap.AdaptiveLightingController);
   assert.equal(f.service.service.testCharacteristic(hap.Characteristic.CharacteristicValueTransitionControl), true);
-  assert.equal(fixture({ selected: false }).service.adaptiveLighting, undefined);
-  assert.equal(fixture({ capabilities: ['switch', 'switchLevel', 'colorTemperature', 'colorControl'] }).service.adaptiveLighting, undefined);
+  assert.equal(fixture({ local: false }).service.adaptiveLighting, undefined);
+  assert.equal(fixture({ capabilities: ['switch', 'switchLevel'] }).service.adaptiveLighting, undefined);
+  assert.ok(fixture({ capabilities: ['switch', 'switchLevel', 'colorTemperature', 'colorControl'] }).service.adaptiveLighting);
+});
+
+test('color-capable light synchronizes hue and saturation and handles external color changes', async () => {
+  const f = fixture({ capabilities: ['switch', 'switchLevel', 'colorTemperature', 'colorControl'] });
+  const controller = f.service.adaptiveLighting;
+  controller.isAdaptiveLightingActive = () => true;
+  let disabled = false;
+  controller.disableAdaptiveLighting = () => { disabled = true; };
+  await f.service.setColorTemp(300, { controller });
+  const expected = hap.ColorUtils.colorTemperatureToHueAndSaturation(300);
+  assert.equal(f.service.service.getCharacteristic(hap.Characteristic.Hue).value, expected.hue);
+  assert.equal(f.service.service.getCharacteristic(hap.Characteristic.Saturation).value, expected.saturation);
+  f.service.processEvent({ capability: 'colorControl', attribute: 'hue', value: Math.round(expected.hue / 360 * 100), eventTime: Date.now() });
+  assert.equal(disabled, false);
+  const different = expected.hue / 360 * 100 > 50 ? 0 : 100;
+  f.service.processEvent({ capability: 'colorControl', attribute: 'hue', value: different, eventTime: Date.now() });
+  assert.equal(disabled, true);
 });
 
 test('adaptive writes are local only, respect the device range, and ignore their own events', async () => {
