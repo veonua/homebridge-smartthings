@@ -80,7 +80,7 @@ export class BaseService {
   }
 
   protected async statusValue<T>(capability: string, attribute: string): Promise<T> {
-    if (await this.getStatus()) {
+    if (this.multiServiceAccessory?.hasRecentLocalEvent?.(this.componentId, capability, attribute) || await this.getStatus()) {
       const value = this.deviceStatus.status?.[capability]?.[attribute]?.value;
       if (value !== undefined && value !== null) {
         return value as T;

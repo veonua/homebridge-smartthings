@@ -78,6 +78,63 @@ test('snapshot cannot overwrite event received while request was in flight', asy
   assert.equal(h.processEvent(ev({ value: 'off', eventTime: Date.parse('2026-10-27T00:00:01Z') })), false);
 });
 
+test('accepted local light commands use the cached snapshot until an event confirms the state', async () => {
+  const { h, accessory, platform } = handler();
+  let reads = 0;
+  let connected = true;
+  platform.hasLocalEventsFor = () => connected;
+  platform.sendDeviceCommands = async () => 'local';
+  platform.getDeviceData = async (_id, type) => {
+    if (type === 'health') return { state: 'ONLINE' };
+    reads++;
+    return { components: { main: { switch: { switch: { value: 'off' } } } } };
+  };
+  h.components.push({ componentId: 'main', capabilities: ['switch'], status: {} });
+  const light = Object.create(LightService.prototype);
+  Object.assign(light, { platform, accessory, log: logger, name: 'Test', componentId: 'main', capabilities: ['switch'],
+    deviceStatus: h.components[0], multiServiceAccessory: h, service: fakeService() });
+  accessory.services.push(light.service);
+  h.services.push(light);
+
+  assert.equal(await light.getSwitchState(), false);
+  assert.equal(reads, 1);
+  await light.setSwitchState(true);
+  assert.equal(await light.getSwitchState(), false, 'ACCEPTED is not a confirmed device state');
+  assert.equal(reads, 1, 'a fresh snapshot must not be invalidated by the local command');
+  assert.equal(h.processEvent(ev({ value: 'on' })), true);
+  assert.equal(await light.getSwitchState(), true);
+  assert.equal(reads, 1, 'the SSE event updates the cached value without a status request');
+
+  h.deviceStatusTimestamp = Date.now() - 6000;
+  assert.equal(await light.getSwitchState(), true);
+  assert.equal(reads, 1, 'a recent SSE event is usable even when the snapshot is old');
+  h.eventAttributes.get(JSON.stringify(['main', 'switch', 'switch'])).receivedAt = Date.now() - 6000;
+  assert.equal(await light.getSwitchState(), false);
+  assert.equal(reads, 2, 'an explicit read refreshes a snapshot older than the cache window');
+
+  connected = false;
+  await light.setSwitchState(false);
+  assert.equal(await light.getSwitchState(), false);
+  assert.equal(reads, 3, 'when events are disconnected the next read refreshes status');
+});
+
+test('a cloud command invalidates the snapshot even when local events are connected', async () => {
+  const { h, platform } = handler();
+  let reads = 0;
+  platform.hasLocalEventsFor = () => true;
+  platform.sendDeviceCommands = async () => 'cloud';
+  platform.getDeviceData = async (_id, type) => {
+    if (type === 'health') return { state: 'ONLINE' };
+    reads++;
+    return { components: { main: { switch: { switch: { value: 'off' } } } } };
+  };
+  h.components.push({ componentId: 'main', capabilities: ['switch'], status: {} });
+  assert.equal(await h.refreshStatus(), true);
+  assert.equal(await h.sendCommand('switch', 'on'), true);
+  assert.equal(await h.refreshStatus(), true);
+  assert.equal(reads, 2);
+});
+
 test('resync publishes state but never replays stateless button snapshots', async () => {
   const { h, accessory, platform } = handler();
   h.components.push({ componentId: 'main', capabilities: ['switch', 'button'], status: {} });

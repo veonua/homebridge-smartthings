@@ -49,7 +49,6 @@ export class WindowCoveringService extends BaseService {
     const command = this.useWindowShadeLevel ? 'setShadeLevel' : 'setLevel';
     await this.sendCommandOrFail(capability, command, [value]);
     this.targetPosition = value as number;
-    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   async getTargetPosition(): Promise<CharacteristicValue> {

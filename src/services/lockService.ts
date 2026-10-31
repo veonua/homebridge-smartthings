@@ -52,7 +52,6 @@ export class LockService extends BaseService {
     this.targetState = value as number;
     this.lockInTransitionStart = Date.now();
     this.service.updateCharacteristic(this.platform.Characteristic.LockTargetState, value);
-    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   // Get the current state of the lock

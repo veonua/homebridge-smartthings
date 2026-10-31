@@ -87,7 +87,6 @@ export class LightService extends BaseService {
   async setSwitchState(value: CharacteristicValue): Promise<void> {
     this.log.debug('Received setSwitchState(' + value + ') event for ' + this.name);
     await this.sendCommandOrFail('switch', value ? 'on' : 'off');
-    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   async getSwitchState(): Promise<CharacteristicValue> {
@@ -96,7 +95,6 @@ export class LightService extends BaseService {
 
   async setLevel(value: CharacteristicValue): Promise<void> {
     await this.sendCommandOrFail('switchLevel', 'setLevel', [value]);
-    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   async getLevel(): Promise<CharacteristicValue> {
@@ -239,8 +237,7 @@ export class LightService extends BaseService {
   }
 
   async getSaturation(): Promise<CharacteristicValue> {
-    const success = await this.getStatus();
-    const saturation = success ? this.deviceStatus.status?.colorControl?.saturation?.value : undefined;
+    const saturation = await this.statusValue<number>('colorControl', 'saturation');
     if (typeof saturation !== 'number' || !Number.isFinite(saturation) || saturation < 0 || saturation > 100) {
       this.log.debug(`Saturation unavailable or invalid for ${this.name}`);
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);

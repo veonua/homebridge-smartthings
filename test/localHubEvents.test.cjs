@@ -81,10 +81,15 @@ async function fixture(t, mode = 'normal') {
         const sub = { ...body, subscriptionId: id,
           registrationUrl: mode === 'foreign' ? 'https://example.invalid/stolen' : `/push/${id}` };
         hub.subscriptions.set(id, sub);
+        if (hub.dropReplacement && hub.posts > 1) { stream.destroy(); return; }
         if (mode === 'dropped') { stream.destroy(); return; }
         if (mode === 'status-400') { hub.subscriptions.delete(id); json(400, { error: 'private details' }); return; }
         if (mode === 'mismatch-create') { json(200, { ...sub, name: 'different name' }); return; }
-        json(200, sub);
+        if (hub.delayReplacement && hub.posts > 1) {
+          hub.releaseReplacement = () => json(200, sub);
+        } else {
+          json(200, sub);
+        }
       });
     } else if (method === 'PUT' && url.startsWith('/subscriptions/')) {
       hub.puts++;
@@ -234,6 +239,49 @@ test('a broken stream reconnects using the saved subscription', async t => {
   assert.equal(f.hub.posts, 1);
   assert.ok(f.hub.lookups >= 1);
   assert.ok(f.observed.disconnected >= 1);
+});
+
+test('creates a replacement before the observed expiry while retaining the active stream', async t => {
+  const f = await fixture(t);
+  f.client.start();
+  await until(() => f.observed.connected === 1, 'first connection');
+  await f.client.stop();
+  const state = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
+  state.lastRotationAt = Date.now() - 4 * 60 * 60 * 1000 + 2000;
+  await fs.writeFile(f.subscriptionFile, JSON.stringify(state), { mode: 0o600 });
+  f.hub.delayReplacement = true;
+  f.client.start();
+  await until(() => f.observed.connected === 2, 'connection before rotation');
+  const originalStream = f.hub.activeStream;
+  await until(() => typeof f.hub.releaseReplacement === 'function', 'replacement request');
+  assert.equal(originalStream.closed, false, 'old event stream stays open while POST is pending');
+  f.hub.releaseReplacement();
+  await until(() => f.observed.connected === 3, 'connection after rotation');
+  assert.equal(f.hub.posts, 2);
+  assert.equal(f.hub.deletes, 0);
+  const updated = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
+  assert.notEqual(updated.subscriptionId, state.subscriptionId);
+});
+
+test('an uncertain proactive POST keeps the old stream and prevents duplicate creation', async t => {
+  const f = await fixture(t);
+  f.client.start();
+  await until(() => f.observed.connected === 1, 'first connection');
+  await f.client.stop();
+  const state = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
+  state.lastRotationAt = Date.now() - 4 * 60 * 60 * 1000 + 2000;
+  await fs.writeFile(f.subscriptionFile, JSON.stringify(state), { mode: 0o600 });
+  f.hub.dropReplacement = true;
+  f.client.start();
+  await until(() => f.observed.connected === 2, 'connection before rotation');
+  const originalStream = f.hub.activeStream;
+  await until(() => f.observed.errors.includes('SubscriptionCreationUnknown'), 'uncertain replacement');
+  assert.equal(originalStream.closed, false);
+  assert.equal(f.hub.posts, 2);
+  assert.equal(JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8')).stage, 'pending');
+  f.hub.activeStream.close();
+  await until(() => f.client.stopped, 'stop after pending marker');
+  assert.equal(f.hub.posts, 2);
 });
 
 test('slow state locking does not leave an HTTP2 session idle', async t => {
@@ -561,6 +609,12 @@ test('two 403s replace an owned subscription once with a durable pending marker'
   ageForbidden(f);
   await assert.rejects(f.client.subscriptionLocked({}, f.credentials), /SubscriptionRotationLimited_Cooldown/);
   assert.equal(f.calls.filter(c => c.method === 'POST').length, 1, 'rotation limit persists in ready state');
+});
+
+test('a 403 after the observed four-hour lifetime replaces without the extra recheck delay', async t => {
+  const f = await rotationFixture(t, { lastRotationAt: Date.now() - 4 * 60 * 60 * 1000 - 1000 });
+  assert.match(await f.client.subscriptionLocked({}, f.credentials), /^\/push\//);
+  assert.equal(f.calls.filter(c => c.method === 'POST').length, 1);
 });
 
 test('ambiguous rotation POST retains pending and never retries', async t => {

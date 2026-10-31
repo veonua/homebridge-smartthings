@@ -62,7 +62,7 @@ test('concurrent commands are serialized and retain the service component', asyn
   Object.assign(accessory, {
     accessory: { UUID: 'local' }, commandTail: Promise.resolve(), commandInProgress: false,
     name: 'test', log: { debug() {}, info() {}, error() {} },
-    platform: { sendDeviceCommands: (id, commands) => {
+    platform: { hasLocalEventsFor: () => true, sendDeviceCommands: (id, commands) => {
       sent.push({ id, commands });
       return new Promise(resolve => pending.push(resolve));
     } },

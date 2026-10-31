@@ -24,7 +24,6 @@ export class SwitchService extends BaseService {
   async setSwitchState(value: CharacteristicValue): Promise<void> {
     this.log.debug('Received setSwitchState(' + value + ') event for ' + this.name);
     await this.sendCommandOrFail('switch', value ? 'on' : 'off');
-    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   // Get the current state of the lock

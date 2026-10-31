@@ -37,7 +37,6 @@ export class FanSwitchLevelService extends BaseService {
 
   async setLevel(value: CharacteristicValue): Promise<void> {
     await this.sendCommandOrFail('switchLevel', 'setLevel', [value]);
-    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   async getLevel(): Promise<CharacteristicValue> {

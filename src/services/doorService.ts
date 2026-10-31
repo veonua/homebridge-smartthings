@@ -56,7 +56,6 @@ export class DoorService extends BaseService {
     this.targetState = value as number;
     this.doorInTransitionStart = Date.now();
     this.service.updateCharacteristic(this.platform.Characteristic.TargetDoorState, value);
-    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   // Get the current state of the door

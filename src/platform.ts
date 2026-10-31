@@ -558,6 +558,10 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     return !!this.localHub && (!this.localDeviceIds || this.localDeviceIds.has(deviceId));
   }
 
+  public hasLocalEventsFor(deviceId: string): boolean {
+    return this.localEventsConnected && this.usesLocalReads(deviceId);
+  }
+
   public async getLocalStatus(deviceId: string): Promise<any> {
     if (!this.localHub) {
       throw new Error('Local hub unavailable');

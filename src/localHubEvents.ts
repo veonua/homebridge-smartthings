@@ -13,6 +13,8 @@ const TIMEOUT = 15000;
 const CHECK_CREDENTIALS_MS = 30000;
 const ROTATION_INTERVAL_MS = 60 * 1000;
 const FORBIDDEN_RECHECK_MS = 30000;
+const OBSERVED_SUBSCRIPTION_LIFETIME_MS = 4 * 60 * 60 * 1000;
+const PREEMPTIVE_REPLACEMENT_MS = 1000;
 const KNOWN_ERRORS = new Set([
   'CertificateHostnameMismatch', 'CertificateVerificationFailed', 'ConnectionClosed', 'ConnectionFailed', 'ConnectionTimeout',
   'CredentialReadFailed', 'ExternalSubscriptionMissing', 'ExternalSubscriptionFilterChanged', 'HubTokenExpired',
@@ -295,6 +297,8 @@ export class LocalHubEvents {
   private done: Promise<void> | undefined;
   private wake: (() => void) | undefined;
   private forbidden: { subscriptionId: string; credentials: string; firstSeen: number } | undefined;
+  private scheduledRotation: { subscriptionId: string; at: number } | undefined;
+  private rotationPromise: Promise<void> | undefined;
 
   constructor(private readonly options: LocalHubEventsOptions) {
     this.locations = [...new Set(options.locationIds)].sort();
@@ -323,6 +327,7 @@ export class LocalHubEvents {
       this.session?.destroy();
     }
     await this.done;
+    await this.rotationPromise;
   }
 
   reconnect(): void {
@@ -352,7 +357,7 @@ export class LocalHubEvents {
     return c;
   }
 
-  private async connect(c: Credential): Promise<ClientHttp2Session> {
+  private async connect(c: Credential, track = true): Promise<ClientHttp2Session> {
     let cert: X509Certificate;
     try {
       cert = new X509Certificate(c.public_certificate);
@@ -364,7 +369,9 @@ export class LocalHubEvents {
       throw new Error('CertificateHostnameMismatch');
     }
     const session = http2.connect(originOf(c), { ca: c.public_certificate, servername, rejectUnauthorized: true });
-    this.session = session;
+    if (track) {
+      this.session = session;
+    }
     session.on('error', () => { });
     await new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -509,6 +516,35 @@ export class LocalHubEvents {
     return this.subscriptionLocked(session, c);
   }
 
+  private scheduleFromState(saved: Stored): void {
+    this.scheduledRotation = saved.ownership !== 'external' && saved.subscriptionId &&
+      saved.lastRotationAt !== undefined && saved.lastRotationAt <= Date.now()
+      ? { subscriptionId: saved.subscriptionId,
+        at: saved.lastRotationAt + OBSERVED_SUBSCRIPTION_LIFETIME_MS - PREEMPTIVE_REPLACEMENT_MS }
+      : undefined;
+  }
+
+  private async rotateBeforeExpiry(c: Credential, subscriptionId: string): Promise<void> {
+    const release = await this.acquireStateLock();
+    let session: ClientHttp2Session | undefined;
+    try {
+      const saved = await this.readState(c);
+      if (this.stopped || this.reconnectRequested || saved?.stage !== 'ready' || saved.ownership === 'external' ||
+        saved.subscriptionId !== subscriptionId || saved.lastRotationAt === undefined ||
+        Date.now() < saved.lastRotationAt + OBSERVED_SUBSCRIPTION_LIFETIME_MS - PREEMPTIVE_REPLACEMENT_MS) {
+        return;
+      }
+      session = await this.connect(c, false);
+      await this.subscriptionLocked(session, c, true);
+    } finally {
+      session?.destroy();
+      await release();
+    }
+    if (!this.stopped) {
+      this.reconnect();
+    }
+  }
+
   private async acquireStateLock(): Promise<() => Promise<void>> {
     await secureDirectory(this.options.subscriptionFile);
     if (!['linux', 'darwin'].includes(process.platform)) {
@@ -588,7 +624,7 @@ export class LocalHubEvents {
     };
   }
 
-  private async subscriptionLocked(session: ClientHttp2Session, c: Credential): Promise<string> {
+  private async subscriptionLocked(session: ClientHttp2Session, c: Credential, proactive = false): Promise<string> {
     const file = this.options.subscriptionFile;
     let saved = await this.readState(c);
     let previous: Stored | undefined;
@@ -610,22 +646,26 @@ export class LocalHubEvents {
         const registration = this.verifySubscription(reply.data, saved, originOf(c));
         locationsChanged = saved.locationIds.length !== this.locations.length ||
           !this.locations.every(id => saved!.locationIds.includes(id));
-        if (!locationsChanged) {
+        if (!locationsChanged && !proactive) {
+          this.scheduleFromState(saved);
           return registration;
         }
         if (saved.ownership === 'external') {
           throw new Error('ExternalSubscriptionFilterChanged');
         }
-        const updated = await this.json(session, c, 'PUT', `/subscriptions/${saved.subscriptionId}`, {
-          subscriptionFilters: [{ type: 'LOCATIONIDS', value: this.locations }],
-        });
-        if (updated.status !== 200) {
-          throw new Error('SubscriptionFilterUpdateFailed');
+        if (locationsChanged) {
+          const updated = await this.json(session, c, 'PUT', `/subscriptions/${saved.subscriptionId}`, {
+            subscriptionFilters: [{ type: 'LOCATIONIDS', value: this.locations }],
+          });
+          if (updated.status !== 200) {
+            throw new Error('SubscriptionFilterUpdateFailed');
+          }
+          const changed = { ...saved, locationIds: this.locations };
+          const updatedRegistration = this.verifySubscription(updated.data, changed, originOf(c));
+          await saveState(file, changed, false);
+          this.scheduleFromState(changed);
+          return updatedRegistration;
         }
-        const changed = { ...saved, locationIds: this.locations };
-        const updatedRegistration = this.verifySubscription(updated.data, changed, originOf(c));
-        await saveState(file, changed, false);
-        return updatedRegistration;
       }
       if (saved.ownership === 'external' && !locationsChanged) {
         this.forbidden = undefined;
@@ -634,17 +674,21 @@ export class LocalHubEvents {
       const credentialHash = `${c.hubId}:${c.hubHost}:${c.hubPort ?? 8766}:${idHash(c)}`;
       if (reply.status === 403) {
         const now = Date.now();
+        const observedExpired = saved.lastRotationAt !== undefined && now >= saved.lastRotationAt &&
+          now - saved.lastRotationAt >= OBSERVED_SUBSCRIPTION_LIFETIME_MS;
         if (!this.forbidden || this.forbidden.subscriptionId !== saved.subscriptionId ||
           this.forbidden.credentials !== credentialHash || now < this.forbidden.firstSeen) {
           this.forbidden = { subscriptionId: saved.subscriptionId!, credentials: credentialHash, firstSeen: now };
-          throw new Error('SubscriptionLookupFailed');
+          if (!observedExpired) {
+            throw new Error('SubscriptionLookupFailed');
+          }
         }
-        if (now - this.forbidden.firstSeen < FORBIDDEN_RECHECK_MS) {
+        if (!observedExpired && now - this.forbidden.firstSeen < FORBIDDEN_RECHECK_MS) {
           throw new Error('SubscriptionLookupFailed');
         }
       } else {
         this.forbidden = undefined;
-        if (reply.status !== 404) {
+        if (reply.status !== 404 && !(proactive && reply.status === 200)) {
           throw new Error('SubscriptionLookupFailed');
         }
       }
@@ -715,6 +759,7 @@ export class LocalHubEvents {
     this.creating = true;
     try {
       let reply;
+      let creationStartedAt = 0;
       try {
         let current: Credential;
         try {
@@ -728,9 +773,11 @@ export class LocalHubEvents {
         }
         if (previous) {
           try {
-            this.options.onInfo?.(`Saved local event subscription is unavailable (hub HTTP ${previousStatus}); creating a replacement.`);
+            this.options.onInfo?.(proactive ? 'Replacing the local event subscription before its observed expiry.' :
+              `Saved local event subscription is unavailable (hub HTTP ${previousStatus}); creating a replacement.`);
           } catch { /* Ignore callback failures. */ }
         }
+        creationStartedAt = Date.now();
         reply = await this.json(session, c, 'POST', '/subscriptions', {
           name: saved.name, version: 1, subscriptionFilters: [{ type: 'LOCATIONIDS', value: this.locations }],
         });
@@ -784,7 +831,7 @@ export class LocalHubEvents {
       }
       const ready: Stored = { version: 1, hubId: saved.hubId, locationIds: saved.locationIds,
         name: saved.name, stage: 'ready', subscriptionId: candidateId,
-        lastRotationAt: Date.now() };
+        lastRotationAt: creationStartedAt };
       try {
  this.verifyOwnership(reply.data, ready);
 } catch {
@@ -798,6 +845,7 @@ export class LocalHubEvents {
       try {
         const registration = registrationPath(reply.data.registrationUrl, originOf(c));
         await saveState(file, ready, false);
+        this.scheduleFromState(ready);
         if (previous) {
           this.replacements++;
           try {
@@ -831,6 +879,7 @@ export class LocalHubEvents {
       let finished = false;
       let connected = false;
       let checkRunning = false;
+      let rotationTimer: NodeJS.Timeout | undefined;
       const req = session.request({
         ':method': 'GET', ':path': endpoint, authorization: `Bearer ${c.access_token}`,
         'x-hub-identifier': c.hubId, accept: 'text/event-stream',
@@ -844,6 +893,9 @@ export class LocalHubEvents {
         }
         finished = true;
         clearTimeout(timeout);
+        if (rotationTimer) {
+          clearTimeout(rotationTimer);
+        }
         clearInterval(interval);
         if (connected) {
           try {
@@ -892,6 +944,20 @@ export class LocalHubEvents {
         }
         clearTimeout(timeout);
         connected = true;
+        const rotation = this.scheduledRotation;
+        if (rotation) {
+          rotationTimer = setTimeout(() => {
+            if (finished || this.stopped || this.rotationPromise) {
+              return;
+            }
+            this.rotationPromise = this.rotateBeforeExpiry(c, rotation.subscriptionId)
+              .catch(error => this.report(safeError('subscription', error)))
+              .finally(() => {
+                this.rotationPromise = undefined;
+              });
+          }, Math.max(0, rotation.at - Date.now()));
+          rotationTimer.unref();
+        }
         try {
           this.options.onConnected();
         } catch {

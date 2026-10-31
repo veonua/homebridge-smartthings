@@ -32,7 +32,6 @@ export class ValveService extends BaseService {
   async setValveState(value: CharacteristicValue): Promise<void> {
     const command = value === this.platform.Characteristic.Active.ACTIVE ? 'open' : 'close';
     await this.sendCommandOrFail('valve', command);
-    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   public processEvent(event: ShortEvent): void {

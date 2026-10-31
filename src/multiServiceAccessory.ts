@@ -207,7 +207,7 @@ export class MultiServiceAccessory {
   protected lastStatusResult = true;
   private eventRevision = 0;
   private hasReceivedEvent = false;
-  private readonly eventAttributes = new Map<string, { revision: number; time?: number; value: any }>();
+  private readonly eventAttributes = new Map<string, { revision: number; time?: number; receivedAt: number; value: any }>();
   private readonly eventIds = new Set<string>();
 
   get id() {
@@ -408,6 +408,15 @@ export class MultiServiceAccessory {
     this.deviceStatusTimestamp = 0;
   }
 
+  public hasRecentLocalEvent(componentId: string, capability: string, attribute: string): boolean {
+    if (!this.platform.hasLocalEventsFor(this.id)) {
+      return false;
+    }
+    const saved = this.eventAttributes.get(JSON.stringify([componentId, capability, attribute]));
+    const current = this.components.find(component => component.componentId === componentId)?.status?.[capability]?.[attribute];
+    return !!saved && Date.now() >= saved.receivedAt && Date.now() - saved.receivedAt <= 5000 && current === saved.value;
+  }
+
 
   /** Recheck an offline device on demand, at reconnect, or when a valid event arrives. */
   public async ensureOnline(): Promise<boolean> {
@@ -445,7 +454,12 @@ export class MultiServiceAccessory {
         ? { ...command, component: componentId } : command);
       const route = await this.platform.sendDeviceCommands(this.id, routed, localOnly);
       this.log.info(`SmartThings command accepted via ${route} for ${this.name}`);
-      this.deviceStatusTimestamp = 0; // Refresh on the next explicit status request.
+      // An accepted command is not a confirmed state. While local events are
+      // connected, retain the last snapshot and let the event update it.
+      // Otherwise the next read must refresh as before.
+      if (route !== 'local' || !this.platform.hasLocalEventsFor(this.id)) {
+        this.forceNextStatusRefresh();
+      }
       return true;
     } catch (error) {
       this.log.error(`${JSON.stringify(commands)} failed for ${this.name}: ${error}`);
@@ -509,7 +523,7 @@ export class MultiServiceAccessory {
         ...(event.unit ? { unit: event.unit } : {}), ...(event.data !== undefined ? { data: event.data } : {}),
         ...(eventTime !== undefined ? { timestamp: new Date(eventTime).toISOString() } : {}) };
       status[event.capability][event.attribute] = value;
-      this.eventAttributes.set(key, { revision: ++this.eventRevision, time: eventTime, value });
+      this.eventAttributes.set(key, { revision: ++this.eventRevision, time: eventTime, receivedAt: Date.now(), value });
     }
     return this.dispatchEvent(event);
   }

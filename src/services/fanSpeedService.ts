@@ -38,7 +38,6 @@ export class FanSpeedService extends BaseService {
   async setLevel(value: CharacteristicValue): Promise<void> {
     const level = value === 0 ? 0 : value as number <= 33 ? 1 : value as number <= 66 ? 2 : 3;
     await this.sendCommandOrFail('fanSpeed', 'setFanSpeed', [level]);
-    this.multiServiceAccessory.forceNextStatusRefresh();
   }
 
   async getLevel(): Promise<CharacteristicValue> {
