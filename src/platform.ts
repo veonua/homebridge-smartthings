@@ -4,7 +4,7 @@ import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import axios = require('axios');
 //import { BasePlatformAccessory } from './basePlatformAccessory';
 import { MultiServiceAccessory } from './multiServiceAccessory';
-import { LocalHubClient, LocalHubCommand } from './localHubClient';
+import { LocalHubClient, LocalHubCommand, LocalCommandTiming } from './localHubClient';
 import { LocalHubEvents, LocalDeviceEvent, describeLocalHubEventsError } from './localHubEvents';
 import { HubTokenManager } from './hubTokenManager';
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
@@ -62,6 +62,8 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     this.log.debug('Finished initializing platform:', this.config.name);
     if (typeof config.LocalHubTokenFile === 'string' && config.LocalHubTokenFile.trim()) {
       this.localHub = new LocalHubClient(config.LocalHubTokenFile);
+      const localHub = this.localHub;
+      this.api.on('shutdown', () => localHub.close());
       if (config.LocalHubAutoRenew === true) {
         this.hubTokenManager = new HubTokenManager(config.LocalHubTokenFile);
         this.api.on('shutdown', () => this.hubTokenManager?.stop());
@@ -570,7 +572,8 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   }
 
   /** Route a command once; an uncertain local result is never retried in the cloud. */
-  public async sendDeviceCommands(deviceId: string, commands: LocalHubCommand[], localOnly = false): Promise<'local' | 'cloud'> {
+  public async sendDeviceCommands(deviceId: string, commands: LocalHubCommand[], localOnly = false,
+    onTiming?: (timing: LocalCommandTiming) => void): Promise<'local' | 'cloud'> {
     if (this.removedDeviceIds.has(deviceId)) {
       throw new Error('Device no longer in the SmartThings catalog');
     }
@@ -583,7 +586,11 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
           throw new Error('Local device list unavailable');
         }
         if (this.localDeviceIds.has(deviceId)) {
-          await this.localHub.executeCommands(deviceId, commands);
+          if (onTiming) {
+            await this.localHub.executeCommands(deviceId, commands, onTiming);
+          } else {
+            await this.localHub.executeCommands(deviceId, commands);
+          }
           return 'local';
         }
       }

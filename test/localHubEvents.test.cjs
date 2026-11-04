@@ -241,17 +241,18 @@ test('a broken stream reconnects using the saved subscription', async t => {
   assert.ok(f.observed.disconnected >= 1);
 });
 
-test('creates a replacement before the observed expiry while retaining the active stream', async t => {
+test('creates a replacement at 3 hours 55 minutes while retaining the active stream', async t => {
   const f = await fixture(t);
   f.client.start();
   await until(() => f.observed.connected === 1, 'first connection');
   await f.client.stop();
   const state = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
-  state.lastRotationAt = Date.now() - 4 * 60 * 60 * 1000 + 2000;
+  state.lastRotationAt = Date.now() - 235 * 60 * 1000 + 1000;
   await fs.writeFile(f.subscriptionFile, JSON.stringify(state), { mode: 0o600 });
   f.hub.delayReplacement = true;
   f.client.start();
   await until(() => f.observed.connected === 2, 'connection before rotation');
+  assert.equal(f.client.scheduledRotation.at, state.lastRotationAt + 235 * 60 * 1000);
   const originalStream = f.hub.activeStream;
   await until(() => typeof f.hub.releaseReplacement === 'function', 'replacement request');
   assert.equal(originalStream.closed, false, 'old event stream stays open while POST is pending');
@@ -269,7 +270,7 @@ test('an uncertain proactive POST keeps the old stream and prevents duplicate cr
   await until(() => f.observed.connected === 1, 'first connection');
   await f.client.stop();
   const state = JSON.parse(await fs.readFile(f.subscriptionFile, 'utf8'));
-  state.lastRotationAt = Date.now() - 4 * 60 * 60 * 1000 + 2000;
+  state.lastRotationAt = Date.now() - 235 * 60 * 1000 + 1000;
   await fs.writeFile(f.subscriptionFile, JSON.stringify(state), { mode: 0o600 });
   f.hub.dropReplacement = true;
   f.client.start();

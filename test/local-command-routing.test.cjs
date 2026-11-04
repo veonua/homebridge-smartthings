@@ -80,3 +80,33 @@ test('concurrent commands are serialized and retain the service component', asyn
   pending.shift()('local');
   assert.equal(await second, true);
 });
+
+test('local switch timing logs distinguish the device queue and exclude command arguments', async () => {
+  const { MultiServiceAccessory } = require('../dist/multiServiceAccessory');
+  const logs = [], pending = [];
+  const accessory = Object.create(MultiServiceAccessory.prototype);
+  Object.assign(accessory, {
+    accessory: { UUID: 'local' }, commandTail: Promise.resolve(), commandInProgress: false,
+    name: 'Test lamp', log: { debug() {}, info: message => logs.push(message), error() {} },
+    platform: { hasLocalEventsFor: () => true, sendDeviceCommands: (_id, _commands, _localOnly, onTiming) =>
+      new Promise(resolve => pending.push(() => {
+        onTiming({ queueMs: 2, prepareMs: 3, connectMs: 4, responseMs: 5 });
+        resolve('local');
+      })) },
+  });
+  const first = accessory.sendCommands([{ capability: 'switch', command: 'on', arguments: ['private-value'] }], 'main');
+  const second = accessory.sendCommands([{ capability: 'switch', command: 'off' }], 'main');
+  await new Promise(resolve => setTimeout(resolve, 40));
+  pending.shift()();
+  assert.equal(await first, true);
+  await new Promise(resolve => setImmediate(resolve));
+  pending.shift()();
+  assert.equal(await second, true);
+  const timingLogs = logs.filter(line => line.startsWith('Local switch timing'));
+  assert.equal(timingLogs.length, 2);
+  assert.match(timingLogs[0], /start=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z/);
+  assert.match(timingLogs[0], /device="Test lamp" component="main" command=on outcome=accepted/);
+  assert.match(timingLogs[0], /hubQueueMs=2\.0 prepareMs=3\.0 connectMs=4\.0 responseMs=5\.0/);
+  assert.ok(Number(/deviceQueueMs=([\d.]+)/.exec(timingLogs[1])[1]) >= 30);
+  assert.doesNotMatch(timingLogs.join('\n'), /private-value/);
+});

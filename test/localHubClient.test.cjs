@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
+const { once } = require('node:events');
 const fs = require('node:fs/promises');
 const http2 = require('node:http2');
 const os = require('node:os');
@@ -48,11 +49,13 @@ test('local hub client verifies TLS, reads devices and reloads the token', async
   const wrong = makeCertificate(dir, 'wrong');
   const trustedPem = await fs.readFile(trusted.cert, 'utf8');
   const receivedTokens = [];
+  let sessions = 0;
   const server = http2.createSecureServer({
     key: await fs.readFile(trusted.key),
     cert: trustedPem,
   });
   server.on('sessionError', () => {});
+  server.on('session', () => { sessions++; });
   server.on('tlsClientError', () => {});
   server.on('stream', (stream, headers) => {
     receivedTokens.push(headers.authorization);
@@ -62,7 +65,6 @@ test('local hub client verifies TLS, reads devices and reloads the token', async
       : { components: { main: { switch: { switch: { value: 'on' } } } } }));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
   const tokenFile = path.join(dir, 'hub.json');
   const credentials = {
     hubId,
@@ -73,6 +75,7 @@ test('local hub client verifies TLS, reads devices and reloads the token', async
   };
   await fs.writeFile(tokenFile, JSON.stringify(credentials));
   const client = new LocalHubClient(tokenFile);
+  t.after(() => { client.close(); return new Promise(resolve => server.close(resolve)); });
 
   assert.deepEqual(await client.getDeviceIds(), new Set(['device-1']));
   assert.deepEqual(await client.get('/devices/device-1/status'), {
@@ -82,6 +85,7 @@ test('local hub client verifies TLS, reads devices and reloads the token', async
   await fs.writeFile(tokenFile, JSON.stringify(credentials));
   await client.getDeviceIds();
   assert.deepEqual(receivedTokens, ['Bearer first-test-token', 'Bearer first-test-token', 'Bearer second-test-token']);
+  assert.equal(sessions, 1, 'sequential reads and renewed tokens reuse the pinned session');
 
   credentials.public_certificate = await fs.readFile(wrong.cert, 'utf8');
   await fs.writeFile(tokenFile, JSON.stringify(credentials));
@@ -124,6 +128,7 @@ test('commands use the pinned HTTP/2 connection and validate every result withou
   let reply = { results: [{ id: 'result-1', status: 'ACCEPTED' }] };
   let httpStatus = 200;
   let abort = false;
+  let delayMs = 0;
   const server = http2.createSecureServer({ key: await fs.readFile(trusted.key), cert: trustedPem });
   server.on('sessionError', () => {});
   server.on('stream', (stream, headers) => {
@@ -136,18 +141,30 @@ test('commands use the pinned HTTP/2 connection and validate every result withou
         stream.close(http2.constants.NGHTTP2_INTERNAL_ERROR);
         return;
       }
-      stream.respond({ ':status': httpStatus, 'content-type': 'application/json' });
-      stream.end(JSON.stringify(reply));
+      const respond = () => {
+        stream.respond({ ':status': httpStatus, 'content-type': 'application/json' });
+        stream.end(JSON.stringify(reply));
+      };
+      if (delayMs) setTimeout(respond, delayMs); else respond();
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
   const tokenFile = path.join(dir, 'hub.json');
   await fs.writeFile(tokenFile, JSON.stringify({ hubId, hubHost: '127.0.0.1', hubPort: server.address().port,
     access_token: 'command-test-token', public_certificate: trustedPem }));
   const client = new LocalHubClient(tokenFile);
+  t.after(() => { client.close(); return new Promise(resolve => server.close(resolve)); });
 
-  await client.executeCommands('device-1', [{ capability: 'switch', command: 'on' }]);
+  const timings = [];
+  delayMs = 80;
+  await client.executeCommands('device-1', [{ capability: 'switch', command: 'on' }], timing => timings.push(timing));
+  delayMs = 0;
+  assert.equal(timings.length, 1);
+  for (const field of ['queueMs', 'prepareMs', 'connectMs', 'responseMs']) {
+    assert.ok(Number.isFinite(timings[0][field]) && timings[0][field] >= 0, field);
+  }
+  assert.ok(timings[0].responseMs >= 60, 'server delay must be measured in response time');
+  assert.doesNotMatch(JSON.stringify(timings), /command-test-token/);
   assert.equal(requests[0].headers[':method'], 'POST');
   assert.equal(requests[0].headers[':path'], '/devices/device-1/commands');
   assert.equal(requests[0].headers.authorization, 'Bearer command-test-token');
@@ -179,11 +196,187 @@ test('commands use the pinned HTTP/2 connection and validate every result withou
     arguments: ['x'.repeat(65536)] }]), /size limit/);
   assert.equal(requests.length, beforeValidation);
   httpStatus = 403;
-  await assert.rejects(client.executeCommands('device-1', [{ capability: 'switch', command: 'on' }]),
+  await assert.rejects(client.executeCommands('device-1', [{ capability: 'switch', command: 'on' }], timing => timings.push(timing)),
     { message: 'Local hub returned HTTP 403', statusCode: 403 });
+  assert.equal(timings.length, 2, 'failed commands also report timings');
   assert.equal(requests.length, beforeValidation + 1, 'a forbidden POST must not be retried');
   httpStatus = 200;
   abort = true;
   await assert.rejects(client.executeCommands('device-1', [{ capability: 'switch', command: 'on' }]));
   assert.equal(requests.length, beforeValidation + 2, 'an uncertain POST must never be retried');
+});
+
+async function until(predicate, label) {
+  const deadline = Date.now() + 3000;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`Timed out: ${label}`);
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+
+async function hubFixture(t, handler) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'local-hub-shared-'));
+  const trusted = makeCertificate(dir, 'shared');
+  const credentials = { hubId, hubHost: '127.0.0.1', access_token: 'shared-test-token',
+    public_certificate: await fs.readFile(trusted.cert, 'utf8') };
+  const sessions = [], requests = [];
+  const server = http2.createSecureServer({ key: await fs.readFile(trusted.key), cert: credentials.public_certificate });
+  server.on('sessionError', () => {});
+  server.on('session', session => { sessions.push(session); });
+  server.on('stream', (stream, headers) => {
+    stream.on('error', () => {});
+    stream.resume();
+    stream.on('end', () => {
+      const respond = () => {
+        stream.respond({ ':status': 200 });
+        stream.end(JSON.stringify(headers[':method'] === 'POST'
+          ? { results: [{ id: 'accepted', status: 'ACCEPTED' }] } : { ok: true }));
+      };
+      requests.push({ stream, headers, respond });
+      handler?.(requests.at(-1), requests);
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  credentials.hubPort = server.address().port;
+  const tokenFile = path.join(dir, 'hub.json');
+  await fs.writeFile(tokenFile, JSON.stringify(credentials));
+  const client = new LocalHubClient(tokenFile);
+  t.after(async () => {
+    client.close();
+    for (const session of sessions) session.destroy();
+    await new Promise(resolve => server.close(resolve));
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  return { client, credentials, tokenFile, requests, sessions };
+}
+
+const switchOn = [{ capability: 'switch', command: 'on' }];
+
+test('simultaneous group commands share one connection and run as concurrent streams', async t => {
+  const f = await hubFixture(t);
+  const commands = Promise.all(['a', 'b', 'c', 'd'].map(id => f.client.executeCommands(id, switchOn)));
+  await until(() => f.requests.length === 4, 'all group commands arrive before any response');
+  assert.equal(f.sessions.length, 1, 'cold concurrent requests share one TLS handshake');
+  assert.equal(new Set(f.requests.map(r => r.stream.id)).size, 4);
+  for (const request of f.requests) request.respond();
+  await commands;
+  const next = f.client.executeCommands('e', switchOn);
+  await until(() => f.requests.length === 5, 'next command');
+  f.requests[4].respond();
+  await next;
+  assert.equal(f.sessions.length, 1, 'later groups reuse the connection');
+});
+
+test('queued commands precede queued reads while the concurrency limit stays at six', async t => {
+  const f = await hubFixture(t);
+  const initial = Array.from({ length: 6 }, (_, i) => f.client.get(`/initial-${i}`));
+  await until(() => f.requests.length === 6, 'six active reads');
+  const reads = [f.client.get('/queued-a'), f.client.get('/queued-b')];
+  const commands = [f.client.executeCommands('a', switchOn), f.client.executeCommands('b', switchOn)];
+  assert.equal(f.requests.length, 6, 'no seventh request starts before capacity is released');
+  f.requests[0].respond();
+  await until(() => f.requests.length === 7, 'first command admitted');
+  assert.equal(f.requests[6].headers[':path'], '/devices/a/commands');
+  f.requests[6].respond();
+  await until(() => f.requests.length === 8, 'second command admitted');
+  assert.equal(f.requests[7].headers[':path'], '/devices/b/commands');
+  f.requests[7].respond();
+  await until(() => f.requests.length === 9, 'first queued read admitted');
+  assert.equal(f.requests[8].headers[':path'], '/queued-a');
+  f.requests[8].respond();
+  await until(() => f.requests.length === 10, 'second queued read admitted');
+  assert.equal(f.requests[9].headers[':path'], '/queued-b');
+  f.requests[9].respond();
+  for (const request of f.requests.slice(1, 6)) request.respond();
+  await Promise.all([...initial, ...reads, ...commands]);
+  assert.equal(f.sessions.length, 1);
+});
+
+test('GOAWAY drains the old session and subsequent commands use a new verified connection', async t => {
+  const f = await hubFixture(t, request => {
+    if (request.headers[':path'] !== '/devices/draining/commands') request.respond();
+  });
+  await f.client.get('/initial');
+  const draining = f.client.executeCommands('draining', switchOn);
+  await until(() => f.requests.length === 2, 'command in flight before GOAWAY');
+  const oldSession = f.sessions[0];
+  const goaway = once(f.client.connection.session, 'goaway');
+  oldSession.goaway(http2.constants.NGHTTP2_NO_ERROR, f.requests[1].stream.id);
+  await goaway;
+  await f.client.executeCommands('a', switchOn);
+  f.requests[1].respond();
+  await draining;
+  assert.equal(f.sessions.length, 2);
+  assert.equal(f.requests.length, 3);
+});
+
+test('a lost command response is never replayed and the next command reconnects', async t => {
+  const f = await hubFixture(t, (request, requests) => {
+    if (requests.length === 1) request.stream.session.destroy();
+    else request.respond();
+  });
+  await assert.rejects(f.client.executeCommands('a', switchOn), /Local hub request/);
+  assert.equal(f.requests.length, 1, 'the uncertain command is sent exactly once');
+  await f.client.executeCommands('b', switchOn);
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.sessions.length, 2);
+});
+
+test('a failed stream does not abort another device command or discard the shared session', async t => {
+  const f = await hubFixture(t);
+  const first = f.client.executeCommands('a', switchOn);
+  const second = assert.rejects(f.client.executeCommands('b', switchOn), /Local hub request/);
+  await until(() => f.requests.length === 2, 'parallel commands');
+  f.requests.find(r => r.headers[':path'] === '/devices/b/commands').stream.close(http2.constants.NGHTTP2_INTERNAL_ERROR);
+  await second;
+  f.requests.find(r => r.headers[':path'] === '/devices/a/commands').respond();
+  await first;
+  const third = f.client.executeCommands('c', switchOn);
+  await until(() => f.requests.length === 3, 'command after stream failure');
+  f.requests[2].respond();
+  await third;
+  assert.equal(f.sessions.length, 1);
+});
+
+test('a changed hub destination and certificate create a new session while an old request drains', async t => {
+  const oldHub = await hubFixture(t);
+  const newHub = await hubFixture(t, request => request.respond());
+  const oldRead = oldHub.client.get('/old');
+  await until(() => oldHub.requests.length === 1, 'old request in flight');
+  await fs.writeFile(oldHub.tokenFile, JSON.stringify(newHub.credentials));
+  await oldHub.client.executeCommands('new', switchOn);
+  assert.equal(newHub.requests.length, 1);
+  assert.equal(oldHub.requests.length, 1, 'new token is sent only to the new verified hub');
+  oldHub.requests[0].respond();
+  assert.deepEqual(await oldRead, { ok: true });
+});
+
+test('closing the client cancels active and queued requests and rejects future work', async t => {
+  const f = await hubFixture(t);
+  const pending = Array.from({ length: 8 }, (_, i) => f.client.get(`/read-${i}`));
+  pending.push(f.client.executeCommands('queued', switchOn));
+  const outcomes = Promise.allSettled(pending);
+  await until(() => f.requests.length === 6, 'active requests');
+  f.client.close();
+  assert.ok((await outcomes).every(result => result.status === 'rejected'));
+  await assert.rejects(f.client.get('/after-close'), /client closed/);
+  assert.equal(f.requests.length, 6, 'shutdown does not dispatch queued work');
+});
+
+test('a request timeout cancels only its stream and leaves the connection usable', async t => {
+  const f = await hubFixture(t, request => {
+    if (request.headers[':path'] !== '/slow') request.respond();
+  });
+  await f.client.get('/warm');
+  const originalSetTimeout = global.setTimeout;
+  t.mock.method(global, 'setTimeout', (callback, delay, ...args) =>
+    originalSetTimeout(callback, delay === 15000 ? 100 : delay, ...args));
+  const slow = assert.rejects(f.client.get('/slow'), /Local hub request timed out/);
+  await until(() => f.requests.length === 2, 'slow stream opened');
+  assert.deepEqual(await f.client.get('/fast'), { ok: true });
+  await slow;
+  await until(() => f.requests[1].stream.closed, 'timed out stream cancelled');
+  await f.client.executeCommands('after-timeout', switchOn);
+  assert.equal(f.sessions.length, 1, 'a timeout does not discard other devices shared connection');
+  assert.equal(f.requests.length, 4, 'the timed out request is not replayed');
 });

@@ -103,9 +103,10 @@ test('legacy webhook settings do not prevent local SSE startup', async () => {
   assert.equal(messages.some(([level]) => level === 'error'), false);
 });
 
-test('successful token renewal reconnects local events and shutdown stops the manager and stream', async () => {
+test('successful token renewal reconnects local events and shutdown stops the manager, stream and local client', async () => {
   const { platform, api } = fixture({ LocalHubAutoRenew: true });
-  let renewal, reconnects = 0, stopped = 0, eventStops = 0;
+  let renewal, reconnects = 0, stopped = 0, eventStops = 0, clientCloses = 0;
+  platform.localHub.close = () => { clientCloses++; };
   platform.hubTokenManager = { start: callback => { renewal = callback; }, stop: () => { stopped++; } };
   platform.localEvents = { reconnect: () => { reconnects++; }, stop: async () => { eventStops++; } };
   platform.getOnlineDevices = () => new Promise(() => {});
@@ -115,6 +116,7 @@ test('successful token renewal reconnects local events and shutdown stops the ma
   api.emit('shutdown');
   assert.equal(stopped, 1);
   assert.equal(eventStops, 1);
+  assert.equal(clientCloses, 1);
 });
 
 

@@ -26,6 +26,8 @@ import { StatelessProgrammableSwitchService } from './services/statelessProgramm
 import { AirConditionerService } from './services/airConditionerService';
 import { AirQualityService } from './services/airQualityService';
 import { Command } from './services/smartThingsCommand';
+import { LocalCommandTiming } from './localHubClient';
+import { performance } from 'node:perf_hooks';
 
 /**
  * Platform Accessory
@@ -441,6 +443,12 @@ export class MultiServiceAccessory {
   }
 
   async sendCommands(commands: Command[], componentId?: string, localOnly = false): Promise<boolean> {
+    const timed = commands.length === 1 && commands[0].capability === 'switch' &&
+      (commands[0].command === 'on' || commands[0].command === 'off');
+    const startedAt = timed ? new Date().toISOString() : '';
+    const started = performance.now();
+    let transportTiming: LocalCommandTiming | undefined;
+    let accepted = false;
     // Reserve our place before yielding so simultaneous HomeKit writes stay ordered.
     const previous = this.commandTail || Promise.resolve();
     let release: () => void = () => {};
@@ -448,11 +456,16 @@ export class MultiServiceAccessory {
       release = resolve;
     });
     await previous;
+    const commandQueueMs = performance.now() - started;
     this.commandInProgress = true;
     try {
       const routed = commands.map(command => componentId && !command.component
         ? { ...command, component: componentId } : command);
-      const route = await this.platform.sendDeviceCommands(this.id, routed, localOnly);
+      const route = await this.platform.sendDeviceCommands(this.id, routed, localOnly,
+        timed ? timing => {
+          transportTiming = timing;
+        } : undefined);
+      accepted = true;
       this.log.info(`SmartThings command accepted via ${route} for ${this.name}`);
       // An accepted command is not a confirmed state. While local events are
       // connected, retain the last snapshot and let the event update it.
@@ -467,6 +480,17 @@ export class MultiServiceAccessory {
     } finally {
       this.commandInProgress = false;
       release();
+      if (transportTiming) {
+        const ms = (value?: number) => value === undefined ? 'n/a' : value.toFixed(1);
+        try {
+          this.log.info(`Local switch timing start=${startedAt} device=${JSON.stringify(this.name)} ` +
+            `component=${JSON.stringify(commands[0].component ?? componentId ?? 'main')} command=${commands[0].command} ` +
+            `outcome=${accepted ? 'accepted' : 'failed'} deviceQueueMs=${ms(commandQueueMs)} ` +
+            `hubQueueMs=${ms(transportTiming.queueMs)} prepareMs=${ms(transportTiming.prepareMs)} ` +
+            `connectMs=${ms(transportTiming.connectMs)} responseMs=${ms(transportTiming.responseMs)} ` +
+            `totalMs=${ms(performance.now() - started)}`);
+        } catch { /* Diagnostics must not affect command handling. */ }
+      }
     }
   }
 

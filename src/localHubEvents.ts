@@ -14,7 +14,7 @@ const CHECK_CREDENTIALS_MS = 30000;
 const ROTATION_INTERVAL_MS = 60 * 1000;
 const FORBIDDEN_RECHECK_MS = 30000;
 const OBSERVED_SUBSCRIPTION_LIFETIME_MS = 4 * 60 * 60 * 1000;
-const PREEMPTIVE_REPLACEMENT_MS = 1000;
+const PREEMPTIVE_REPLACEMENT_MS = 5 * 60 * 1000;
 const KNOWN_ERRORS = new Set([
   'CertificateHostnameMismatch', 'CertificateVerificationFailed', 'ConnectionClosed', 'ConnectionFailed', 'ConnectionTimeout',
   'CredentialReadFailed', 'ExternalSubscriptionMissing', 'ExternalSubscriptionFilterChanged', 'HubTokenExpired',
