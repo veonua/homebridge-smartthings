@@ -234,6 +234,7 @@ function brightnessStep(matter: MatterAPI, device: MultiServiceAccessory, compon
 
 function switchEndpoint(matter: MatterAPI, component: Component, categories: string[], send: SendCommand,
   matterPower: () => Promise<boolean | undefined>, writeStep: WriteStep,
+  writeTemperature: (commands: Command[], beforeSend: () => boolean) => Promise<boolean>,
 ): Endpoint | undefined {
   const capabilities = component.capabilities;
   if (!capabilities.includes('switch') || capabilities.some(c => complexSwitchCapabilities.has(c)) ||
@@ -358,8 +359,20 @@ function switchEndpoint(matter: MatterAPI, component: Component, categories: str
         if (requested === undefined) {
           throw new Error('Invalid Matter color temperature');
         }
+        const isOn = () => read(component, 'switch', 'switch')?.value === 'on';
+        if (!isOn()) {
+          return;
+        }
         const { min, max } = temperatureRange(component);
-        await send('colorTemperature', 'setColorTemperature', [Math.round(1000000 / Math.max(min, Math.min(max, requested)))]);
+        await send('colorTemperature', 'setColorTemperature', [Math.round(1000000 / Math.max(min, Math.min(max, requested)))],
+          async commands => {
+            let skipped = false;
+            const sent = await writeTemperature(commands, () => {
+              skipped = !isOn();
+              return !skipped;
+            });
+            return sent || skipped;
+          });
       },
     };
     if (color) {
@@ -501,7 +514,7 @@ export class SmartThingsMatter {
         (delta, withOnOff, minLevel) => {
           this.log.info(`Matter ${withOnOff ? 'StepWithOnOff' : 'Step'} received for ${device.name}`);
           return step(delta, withOnOff, minLevel);
-        });
+        }, (commands, beforeSend) => device.sendCommands(commands, undefined, false, beforeSend));
       const air = airQualityEndpoint(matter, component);
       const endpoints = [...(power ? [power] : []), ...sensorEndpoints(matter, component), ...(air ? [air] : [])];
       return endpoints.map((endpoint): [MultiServiceAccessory, Entry] => {

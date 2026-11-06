@@ -53,7 +53,10 @@ function fixture() {
   const bridge = new SmartThingsMatter(api, log);
   const addDevice = (id, name, componentId, categories, status, capabilities = Object.keys(status)) => {
     const device = { id, name, isOnline: () => true, components: [{ componentId, capabilities, status }],
-      sendCommands: async items => { commands.push(...items.map(c => ({ ...c }))); return true; } };
+      sendCommands: async (items, _component, _localOnly, beforeSend) => {
+        if (beforeSend && !beforeSend()) return false;
+        commands.push(...items.map(c => ({ ...c }))); return true;
+      } };
     return { device, metadata: { components: [{ id: componentId, categories: categories.map(name => ({ name })) }] } };
   };
   const byType = name => [...registered.values()].find(e => e.accessory.deviceType.name === name);
@@ -300,7 +303,7 @@ test('StepWithOnOff waits for physical power and minimum level reports in comman
 test('color commands use SmartThings units', async () => {
   const f = fixture();
   const lamp = f.addDevice('lamp', 'Lamp', 'main', ['Light'], {
-    switch: { switch: value('off') }, switchLevel: { level: value(50) },
+    switch: { switch: value('on') }, switchLevel: { level: value(50) },
     colorControl: { hue: value(0), saturation: value(100) },
     colorTemperature: { colorTemperature: value(3000, 'K'), colorTemperatureRange: value({ minimum: 2200, maximum: 4000 }, 'K') },
   });
@@ -314,6 +317,28 @@ test('color commands use SmartThings units', async () => {
   ]);
   assert.equal(entry.state.colorControl.colorTemperatureMireds, 333);
   assert.ok(Math.abs(entry.state.colorControl.currentX - Math.round(0.64 * 65536)) < 10);
+});
+
+test('Matter temperature commands never reach an off or unknown lamp, including when queued', async () => {
+  const f = fixture();
+  const lamp = f.addDevice('lamp', 'Lamp', 'main', ['Light'], {
+    switch: { switch: value('off') }, switchLevel: { level: value(50) },
+    colorTemperature: { colorTemperature: value(3000, 'K') },
+  });
+  await f.bridge.start(f.matter, [lamp]);
+  const control = f.byType('ColorTemperatureLight').accessory.handlers.colorControl;
+  await control.moveToColorTemperatureLogic({ colorTemperatureMireds: 300 });
+  lamp.device.components[0].status.switch.switch = value(undefined);
+  await control.moveToColorTemperatureLogic({ colorTemperatureMireds: 300 });
+  assert.equal(f.commands.length, 0);
+  lamp.device.components[0].status.switch.switch = value('on');
+  lamp.device.sendCommands = async (_commands, _component, _localOnly, beforeSend) => {
+    lamp.device.components[0].status.switch.switch = value('off');
+    assert.equal(beforeSend(), false);
+    return false;
+  };
+  await control.moveToColorTemperatureLogic({ colorTemperatureMireds: 300 });
+  assert.equal(f.commands.length, 0);
 });
 
 test('a restored device keeps its endpoint identity and unavailable sensors do not report a synthetic reading', async () => {
