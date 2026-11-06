@@ -38,15 +38,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint and build with the Homebridge 2 API types
+        run: npm run lint && npm run build
+
       - name: Install Homebridge 1
         if: matrix.homebridge == 1
         run: npm install --no-save --ignore-scripts --no-audit --no-fund homebridge@1.11.4
 
-      - name: Lint the project
-        run: npm run lint
-
       - name: Test the project
-        run: npm test
+        run: npm run test:built
         env:
           CI: true
           HAP_NODEJS_MODULE: ${{ matrix.hap_module }}

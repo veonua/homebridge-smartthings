@@ -1,4 +1,6 @@
-import { API, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service, Characteristic } from 'homebridge';
+import {
+  API, DynamicPlatformPlugin, Logger, MatterAccessory, PlatformAccessory, PlatformConfig, Service, Characteristic,
+} from 'homebridge';
 
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import axios = require('axios');
@@ -10,6 +12,7 @@ import { HubTokenManager } from './hubTokenManager';
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { dirname, join } from 'path';
+import { SmartThingsMatter } from './matter';
 
 /**
  * HomebridgePlatform
@@ -46,6 +49,9 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   private catalogRefreshTimer: NodeJS.Timeout | undefined;
   private readonly removedDeviceIds = new Set<string>();
   private readonly forbiddenDeviceIds = new Set<string>();
+  private readonly matterBridge: SmartThingsMatter;
+  private matterTimer: NodeJS.Timeout | undefined;
+  private matterRefreshing = false;
 
   constructor(
     public readonly log: Logger,
@@ -54,6 +60,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   ) {
     this.Service = api.hap.Service;
     this.Characteristic = api.hap.Characteristic;
+    this.matterBridge = new SmartThingsMatter(api, log);
     this.axInstance = axios.create({
       baseURL: config.BaseURL,
       headers: { 'Authorization': 'Bearer: ' + config.AccessToken },
@@ -73,6 +80,10 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     }
     this.api.on('shutdown', () => {
       this.shuttingDown = true;
+      this.matterBridge.close();
+      if (this.matterTimer) {
+        clearInterval(this.matterTimer);
+      }
       if (this.catalogRefreshTimer) {
         clearTimeout(this.catalogRefreshTimer);
         this.catalogRefreshTimer = undefined;
@@ -124,6 +135,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
           this.unregisterDevices(devices, true);
         }
         this.discoverDevices(devices);
+        void this.startMatter();
         if (this.config.LocalHubEvents === true) {
           this.startLocalEvents(devices);
         }
@@ -216,6 +228,58 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     }
   }
 
+  private async startMatter(): Promise<void> {
+    const api = this.api as API & { isMatterExternalsOnly?: () => boolean };
+    const matter = api.isMatterEnabled?.() && !api.isMatterExternalsOnly?.() ? api.matter : undefined;
+    if (!matter) {
+      if (this.config.Matter === true) {
+        this.log.warn('Enable Matter on the Homebridge bridge that runs SmartThings to publish devices.');
+      }
+      return;
+    }
+    try {
+      const byId = new Map(this.accessories.map(a => [a.UUID, a.context.device]));
+      await this.matterBridge.start(matter, this.config.Matter === true ? this.accessoryObjects.map(device => ({
+        device, metadata: byId.get(device.id) ?? {},
+      })) : []);
+      if (this.config.Matter === true && !this.shuttingDown) {
+        void this.refreshMatterSnapshots();
+        this.matterTimer = setInterval(() => void this.refreshMatterSnapshots(), 60000);
+        this.matterTimer.unref();
+      }
+    } catch (error) {
+      this.log.warn(`Could not publish SmartThings devices to Matter: ${error}`);
+    }
+  }
+
+  private async refreshMatterSnapshots(): Promise<void> {
+    if (this.shuttingDown || this.matterRefreshing) {
+      return;
+    }
+    this.matterRefreshing = true;
+    try {
+      for (const device of this.accessoryObjects) {
+        if (this.shuttingDown) {
+          return;
+        }
+        if (this.matterBridge.hasDevice(device.id) && !this.hasLocalEventsFor(device.id)) {
+          try {
+            const available = await device.ensureOnline() && await device.refreshStatus();
+            this.matterBridge.sync(device, undefined, undefined, available);
+          } catch (error) {
+            this.log.debug(`Could not refresh Matter state for ${device.name}: ${error}`);
+          }
+        }
+      }
+    } finally {
+      this.matterRefreshing = false;
+    }
+  }
+
+  public updateMatterState(device: MultiServiceAccessory, componentId?: string, capability?: string): void {
+    this.matterBridge.sync(device, componentId, capability);
+  }
+
   private async resyncAccessories(all: boolean): Promise<void> {
     if (this.shuttingDown) {
       return;
@@ -233,7 +297,10 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
         }
         if (all) {
           try {
-            await accessory.resyncState();
+            const available = await accessory.resyncState();
+            if (this.matterBridge.hasDevice(accessory.id)) {
+              this.matterBridge.sync(accessory, undefined, undefined, available);
+            }
           } catch (error) {
             this.log.debug(`Could not reconcile ${accessory.id}: ${error}`);
           }
@@ -257,6 +324,10 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
 
     // add the restored accessory to the accessories cache so we can track if it has already been registered
     this.accessories.push(accessory);
+  }
+
+  configureMatterAccessory(accessory: MatterAccessory): void {
+    this.matterBridge.restore(accessory);
   }
 
   async getLocationsToIgnore(): Promise<boolean> {
@@ -444,6 +515,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     ids.forEach(id => this.removedDeviceIds.delete(id));
     this.accessories.splice(0, this.accessories.length, ...this.accessories.filter(accessory => !missing.has(accessory.UUID)));
     this.accessoryObjects = this.accessoryObjects.filter(accessory => !missing.has(accessory.id));
+    void this.matterBridge.removeDevices(missing);
     this.forbiddenDeviceIds.clear();
     this.log.info(`Local device catalog checked: ${ids.size} devices; removed ${removed.length} stale accessories`);
   }

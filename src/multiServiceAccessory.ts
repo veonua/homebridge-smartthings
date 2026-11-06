@@ -41,6 +41,8 @@ interface Component {
   status: Record<string, unknown>;
 }
 
+type CommandWriter = (commands: Command[], componentId?: string, localOnly?: boolean) => Promise<boolean>;
+
 // Attributes read by the services below. Other capabilities may be command-only
 // or optional and are not required for a local status response.
 const STATUS_ATTRIBUTES: Record<string, string[]> = {
@@ -53,6 +55,7 @@ const STATUS_ATTRIBUTES: Record<string, string[]> = {
   temperatureMeasurement: ['temperature'], relativeHumidityMeasurement: ['humidity'],
   illuminanceMeasurement: ['illuminance'], contactSensor: ['contact'], battery: ['battery'],
   carbonDioxideMeasurement: ['carbonDioxide'], dustSensor: ['fineDustLevel'], button: ['button'],
+  powerMeter: ['power'], energyMeter: ['energy'], voltageMeasurement: ['voltage'], currentMeasurement: ['current'],
   thermostatMode: ['thermostatMode'], thermostatHeatingSetpoint: ['heatingSetpoint'],
   thermostatCoolingSetpoint: ['coolingSetpoint'], airConditionerMode: ['airConditionerMode'],
   airConditionerFanMode: ['fanMode'], fanOscillationMode: ['fanOscillationMode'],
@@ -207,6 +210,7 @@ export class MultiServiceAccessory {
 
   protected statusQueryInProgress = false;
   protected lastStatusResult = true;
+  private statusListeners?: Set<() => void>;
   private eventRevision = 0;
   private hasReceivedEvent = false;
   private readonly eventAttributes = new Map<string, { revision: number; time?: number; receivedAt: number; value: any }>();
@@ -391,6 +395,8 @@ export class MultiServiceAccessory {
       });
       this.failureCount = 0;
       this.lastStatusResult = true;
+      this.statusListeners?.forEach(listener => listener());
+      this.platform.updateMatterState?.(this);
       return true;
     } catch (error) {
       this.failureCount++;
@@ -420,6 +426,35 @@ export class MultiServiceAccessory {
   }
 
 
+  /** Wait for a reported state before a command that depends on it. */
+  public async confirmStatus(matches: (fromSnapshot: boolean) => boolean): Promise<boolean> {
+    if (matches(false)) {
+      return true;
+    }
+    const listeners = this.statusListeners ??= new Set();
+    const waitMs = this.platform.hasLocalEventsFor(this.id) ? 1500 : 400;
+    const confirmed = await new Promise<boolean>(resolve => {
+      const finish = (matched: boolean) => {
+        clearTimeout(timer);
+        listeners.delete(onChange);
+        resolve(matched);
+      };
+      const onChange = () => {
+        if (matches(false)) {
+          finish(true);
+        }
+      };
+      const timer = setTimeout(() => finish(false), waitMs);
+      listeners.add(onChange);
+    });
+    if (confirmed) {
+      return true;
+    }
+    this.forceNextStatusRefresh();
+    return await this.refreshStatus() && matches(true);
+  }
+
+
   /** Recheck an offline device on demand, at reconnect, or when a valid event arrives. */
   public async ensureOnline(): Promise<boolean> {
     if (this.online) {
@@ -443,19 +478,32 @@ export class MultiServiceAccessory {
   }
 
   async sendCommands(commands: Command[], componentId?: string, localOnly = false): Promise<boolean> {
-    const timed = commands.length === 1 && commands[0].capability === 'switch' &&
-      (commands[0].command === 'on' || commands[0].command === 'off');
-    const startedAt = timed ? new Date().toISOString() : '';
+    const startedAt = Date.now();
     const started = performance.now();
-    let transportTiming: LocalCommandTiming | undefined;
-    let accepted = false;
-    // Reserve our place before yielding so simultaneous HomeKit writes stay ordered.
+    return this.withCommandQueue(() => this.sendQueuedCommands(commands, componentId, localOnly, started, startedAt));
+  }
+
+  /** Keep commands that depend on each other in the same device queue turn. */
+  public async withCommandQueue<T>(run: (send: CommandWriter) => Promise<T>): Promise<T> {
     const previous = this.commandTail || Promise.resolve();
     let release: () => void = () => {};
     this.commandTail = new Promise<void>(resolve => {
       release = resolve;
     });
     await previous;
+    try {
+      return await run(this.sendQueuedCommands.bind(this));
+    } finally {
+      release();
+    }
+  }
+
+  private async sendQueuedCommands(commands: Command[], componentId?: string, localOnly = false,
+    started = performance.now(), startedAt = Date.now()): Promise<boolean> {
+    const timed = commands.length === 1 && commands[0].capability === 'switch' &&
+      (commands[0].command === 'on' || commands[0].command === 'off');
+    let transportTiming: LocalCommandTiming | undefined;
+    let accepted = false;
     const commandQueueMs = performance.now() - started;
     this.commandInProgress = true;
     try {
@@ -479,11 +527,10 @@ export class MultiServiceAccessory {
       return false;
     } finally {
       this.commandInProgress = false;
-      release();
       if (transportTiming) {
         const ms = (value?: number) => value === undefined ? 'n/a' : value.toFixed(1);
         try {
-          this.log.info(`Local switch timing start=${startedAt} device=${JSON.stringify(this.name)} ` +
+          this.log.info(`Local switch timing start=${new Date(startedAt).toISOString()} device=${JSON.stringify(this.name)} ` +
             `component=${JSON.stringify(commands[0].component ?? componentId ?? 'main')} command=${commands[0].command} ` +
             `outcome=${accepted ? 'accepted' : 'failed'} deviceQueueMs=${ms(commandQueueMs)} ` +
             `hubQueueMs=${ms(transportTiming.queueMs)} prepareMs=${ms(transportTiming.prepareMs)} ` +
@@ -548,6 +595,8 @@ export class MultiServiceAccessory {
         ...(eventTime !== undefined ? { timestamp: new Date(eventTime).toISOString() } : {}) };
       status[event.capability][event.attribute] = value;
       this.eventAttributes.set(key, { revision: ++this.eventRevision, time: eventTime, receivedAt: Date.now(), value });
+      this.statusListeners?.forEach(listener => listener());
+      this.platform.updateMatterState?.(this, event.componentId, event.capability);
     }
     return this.dispatchEvent(event);
   }

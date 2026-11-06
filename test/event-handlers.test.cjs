@@ -46,6 +46,22 @@ function installService(h, accessory, capability, action) {
   return output;
 }
 
+test('electrical events update cached measurements and notify Matter', () => {
+  const { h, platform } = handler();
+  const updates = [];
+  platform.updateMatterState = (_device, component, capability) => updates.push([component, capability]);
+  h.components.push({ componentId: 'main', capabilities: ['powerMeter', 'energyMeter', 'voltageMeasurement', 'currentMeasurement'], status: {} });
+  for (const [capability, attribute, value, unit] of [
+    ['powerMeter', 'power', 1027, 'W'], ['energyMeter', 'energy', 0.088, 'kWh'],
+    ['voltageMeasurement', 'voltage', 235, 'V'], ['currentMeasurement', 'current', 4.451, 'A'],
+  ]) {
+    h.processEvent(ev({ capability, attribute, value, unit }));
+    assert.equal(h.components[0].status[capability][attribute].value, value);
+    assert.equal(h.components[0].status[capability][attribute].unit, unit);
+  }
+  assert.deepEqual(updates.map(item => item[1]), ['powerMeter', 'energyMeter', 'voltageMeasurement', 'currentMeasurement']);
+});
+
 test('dispatches validated events to all matching services and returns actual update result', () => {
   const { h, accessory } = handler();
   h.components.push({ componentId: 'main', capabilities: ['switch'], status: {} });

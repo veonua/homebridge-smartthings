@@ -44,6 +44,12 @@
         "required": false,
         "default": false
       },
+      "Matter": {
+        "title": "Publish SmartThings Devices over Matter",
+        "description": "Expose supported SmartThings devices on the Matter bridge. Enable Matter for this bridge in Homebridge 2.1 or later.",
+        "type": "boolean",
+        "default": false
+      },
       "SetColorDevices": {
         "title": "Lights Requiring Combined Color Commands",
         "description": "Device names or IDs for lights that accept setColor but not separate hue and saturation commands.",
