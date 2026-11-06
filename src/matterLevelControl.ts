@@ -14,7 +14,8 @@ function behaviorClass(derived: Behavior.Type): typeof Behavior {
   return base as unknown as typeof Behavior;
 }
 
-export function withSmartThingsLevelControl(type: MutableEndpoint, writeLevel: (level: number) => Promise<void>,
+export function withSmartThingsLevelControl(type: MutableEndpoint,
+  writeLevel: (level: number, transitionTime: number | null) => Promise<void>,
   writeStep: WriteStep): MutableEndpoint {
   const LevelControlServer = type.behaviors.levelControl as LevelControl;
   const LocalBehavior = behaviorClass(LevelControlServer);
@@ -25,8 +26,8 @@ export function withSmartThingsLevelControl(type: MutableEndpoint, writeLevel: (
   class SmartThingsBrightness extends LocalBehavior {
     static override readonly id = 'smartThingsBrightness';
 
-    write(level: number): Promise<void> {
-      return writeLevel(level);
+    write(level: number, transitionTime: number | null): Promise<void> {
+      return writeLevel(level, transitionTime);
     }
 
     step(delta: number, withOnOff: boolean, minLevel: number): Promise<void> {
@@ -40,10 +41,11 @@ export function withSmartThingsLevelControl(type: MutableEndpoint, writeLevel: (
       return this.endpoint.stateOf('onOff').onOff === true;
     }
 
-    override async moveToLevelLogic(level: number, _transitionTime: number | null, withOnOff: boolean, options = {}): Promise<void> {
+    override async moveToLevelLogic(level: number, transitionTime: number | null, withOnOff: boolean, options = {}): Promise<void> {
       const target = Math.max(this.minLevel, Math.min(this.maxLevel, level));
+      const effectiveTime = transitionTime ?? this.state.onOffTransitionTime ?? null;
       if (withOnOff || this.switchIsOn) {
-        await this.agent.get(SmartThingsBrightness).write(withOnOff && target === this.minLevel ? 0 : target);
+        await this.agent.get(SmartThingsBrightness).write(withOnOff && target === this.minLevel ? 0 : target, effectiveTime);
       }
       // Matter.js 0.17 couples OnOff synchronously. Acquire both clusters
       // asynchronously if a SmartThings report is still being applied.
@@ -52,9 +54,8 @@ export function withSmartThingsLevelControl(type: MutableEndpoint, writeLevel: (
         await this.context.transaction.addResources(this, this.agent.get(onOff));
         await this.context.transaction.begin();
       }
-      // SmartThings applies these writes immediately. Let the native server
-      // update Matter's level and on/off state in the same transaction.
-      await super.moveToLevelLogic(target, 0, withOnOff, options);
+      // The physical device reports its actual level; retain Matter's transition model.
+      await super.moveToLevelLogic(target, effectiveTime, withOnOff, options);
     }
 
     override stepLogic(mode: number, size: number, _transitionTime: number | null, withOnOff: boolean): Promise<void> {

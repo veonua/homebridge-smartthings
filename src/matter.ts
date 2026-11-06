@@ -314,12 +314,10 @@ function switchEndpoint(matter: MatterAPI, component: Component, categories: str
     });
     // Homebridge's handler wrapper does not forward StepWithOnOff. Compose
     // the native level cluster with the SmartThings driver instead.
-    type = withSmartThingsLevelControl(baseType, async level => {
-      if (level === 0) {
-        await send('switch', 'off');
-      } else {
-        await send('switchLevel', 'setLevel', [Math.max(1, Math.round(level * 100 / LEVEL_MAX)), 0]);
-      }
+    type = withSmartThingsLevelControl(baseType, async (level, transitionTime) => {
+      const percent = level === 0 ? 0 : Math.max(1, Math.round(level * 100 / LEVEL_MAX));
+      // SmartThings Zigbee and Matter drivers use tenths of a second.
+      await send('switchLevel', 'setLevel', [percent, transitionTime ?? 0]);
     }, writeStep);
   }
   if (temperature) {

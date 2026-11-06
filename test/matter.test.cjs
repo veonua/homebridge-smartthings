@@ -69,6 +69,7 @@ function levelControlFor(entry) {
   const driver = new Driver();
   return Object.assign(new Control(), entry.state.levelControl, {
     context: { transaction: { lock() {} } },
+    state: {},
     endpoint: { stateOf: name => entry.state[name] },
     agent: { get: Type => Type === Driver ? driver : { state: entry.state.onOff } },
   });
@@ -208,8 +209,22 @@ test('absolute brightness still works on devices without a standard relative com
   await levelControl.moveToLevelLogic(0, 0, true);
   assert.equal(entry.state.onOff.onOff, false);
   assert.deepEqual(f.commands.map(c => [c.command, c.arguments]), [
-    ['setLevel', [50, 0]], ['off', undefined],
+    ['setLevel', [50, 0]], ['setLevel', [0, 0]],
   ]);
+});
+
+test('Matter absolute brightness forwards the requested transition in tenths of a second', async () => {
+  const f = fixture();
+  const lamp = f.addDevice('lamp', 'Lamp', 'main', ['Light'], {
+    switch: { switch: value('on') }, switchLevel: { level: value(50) },
+  });
+  await f.bridge.start(f.matter, [lamp]);
+  const control = levelControlFor(f.byType('DimmableLight'));
+  control.state = { onOffTransitionTime: 30 };
+  await control.moveToLevelLogic(180, 25, false);
+  await control.moveToLevelLogic(120, null, false);
+  await control.moveToLevelLogic(0, 20, true);
+  assert.deepEqual(f.commands.map(c => c.arguments), [[71, 25], [47, 30], [0, 20]]);
 });
 
 test('forwards standard relative brightness without estimating the reported level', async () => {
