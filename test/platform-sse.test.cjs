@@ -119,6 +119,18 @@ test('successful token renewal reconnects local events and shutdown stops the ma
   assert.equal(clientCloses, 1);
 });
 
+test('local hub recovery reports the outage duration and requests a full state reconciliation', async () => {
+  const { platform, messages } = fixture();
+  const reconciliations = [];
+  platform.resyncAccessories = async all => { reconciliations.push(all); };
+  platform.localHub.callbacks.onUnavailable('ENETUNREACH');
+  platform.localHub.callbacks.onRestored(30500);
+  assert.deepEqual(reconciliations, [true]);
+  assert.ok(messages.some(([level, message]) => level === 'warn' && message.includes('Local hub unavailable (ENETUNREACH)')));
+  assert.ok(messages.some(([level, message]) => level === 'warn' && message.includes('pausing requests for 30 seconds')));
+  assert.ok(messages.some(([level, message]) => level === 'info' && message.includes('restored after 30.5 seconds')));
+});
+
 
 
 

@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { LocalHubUnavailableError } = require('../dist/localHubClient');
 
 class HapStatusError extends Error { constructor(code) { super('HAP error'); this.code = code; } }
 const HAP_FAILURE = -70402;
@@ -41,6 +42,18 @@ function makeService(file, type, sendCommand, online = true) {
   });
   return instance;
 }
+
+test('a local network command failure maps to HomeKit without duplicate per-device error logs', async () => {
+  let sent = 0, logged = 0;
+  const service = makeService('switchService', 'SwitchService', async () => {
+    sent++;
+    throw new LocalHubUnavailableError('ENETUNREACH', Date.now() + 30000);
+  });
+  service.log = { ...log, error: () => { logged++; } };
+  await assert.rejects(service.setSwitchState(true), error => error instanceof HapStatusError && error.code === HAP_FAILURE);
+  assert.equal(sent, 1);
+  assert.equal(logged, 0);
+});
 for (const [file, type, method, value, expected] of cases) {
   test(`${type}.${method} waits for the command and reports a failure`, async () => {
     let resolveCommand;

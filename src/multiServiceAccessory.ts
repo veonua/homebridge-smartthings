@@ -26,8 +26,7 @@ import { StatelessProgrammableSwitchService } from './services/statelessProgramm
 import { AirConditionerService } from './services/airConditionerService';
 import { AirQualityService } from './services/airQualityService';
 import { Command } from './services/smartThingsCommand';
-import { LocalCommandTiming } from './localHubClient';
-import { performance } from 'node:perf_hooks';
+import { LocalHubUnavailableError } from './localHubClient';
 
 /**
  * Platform Accessory
@@ -41,7 +40,7 @@ interface Component {
   status: Record<string, unknown>;
 }
 
-type CommandWriter = (commands: Command[], componentId?: string, localOnly?: boolean) => Promise<boolean>;
+type CommandWriter = (commands: Command[], componentId?: string, localOnly?: boolean, beforeSend?: () => boolean) => Promise<boolean>;
 
 // Attributes read by the services below. Other capabilities may be command-only
 // or optional and are not required for a local status response.
@@ -399,6 +398,10 @@ export class MultiServiceAccessory {
       this.platform.updateMatterState?.(this);
       return true;
     } catch (error) {
+      if (error instanceof LocalHubUnavailableError) {
+        this.lastStatusResult = false;
+        return false;
+      }
       this.failureCount++;
       this.log.error(`Failed to request status from ${this.name}: ${error}.  This is failure number ${this.failureCount}`);
       if (this.failureCount >= 5) {
@@ -424,7 +427,6 @@ export class MultiServiceAccessory {
     const current = this.components.find(component => component.componentId === componentId)?.status?.[capability]?.[attribute];
     return !!saved && Date.now() >= saved.receivedAt && Date.now() - saved.receivedAt <= 5000 && current === saved.value;
   }
-
 
   /** Wait for a reported state before a command that depends on it. */
   public async confirmStatus(matches: (fromSnapshot: boolean) => boolean): Promise<boolean> {
@@ -477,10 +479,8 @@ export class MultiServiceAccessory {
     return this.sendCommands([cmd]);
   }
 
-  async sendCommands(commands: Command[], componentId?: string, localOnly = false): Promise<boolean> {
-    const startedAt = Date.now();
-    const started = performance.now();
-    return this.withCommandQueue(() => this.sendQueuedCommands(commands, componentId, localOnly, started, startedAt));
+  async sendCommands(commands: Command[], componentId?: string, localOnly = false, beforeSend?: () => boolean): Promise<boolean> {
+    return this.withCommandQueue(send => send(commands, componentId, localOnly, beforeSend));
   }
 
   /** Keep commands that depend on each other in the same device queue turn. */
@@ -499,22 +499,21 @@ export class MultiServiceAccessory {
   }
 
   private async sendQueuedCommands(commands: Command[], componentId?: string, localOnly = false,
-    started = performance.now(), startedAt = Date.now()): Promise<boolean> {
-    const timed = commands.length === 1 && commands[0].capability === 'switch' &&
-      (commands[0].command === 'on' || commands[0].command === 'off');
-    let transportTiming: LocalCommandTiming | undefined;
-    let accepted = false;
-    const commandQueueMs = performance.now() - started;
+    beforeSend?: () => boolean): Promise<boolean> {
     this.commandInProgress = true;
     try {
+      if (beforeSend && !beforeSend()) {
+        return false;
+      }
       const routed = commands.map(command => componentId && !command.component
         ? { ...command, component: componentId } : command);
-      const route = await this.platform.sendDeviceCommands(this.id, routed, localOnly,
-        timed ? timing => {
-          transportTiming = timing;
-        } : undefined);
-      accepted = true;
-      this.log.info(`SmartThings command accepted via ${route} for ${this.name}`);
+      const route = await this.platform.sendDeviceCommands(this.id, routed, localOnly);
+      const message = `SmartThings command accepted via ${route} for ${this.name}`;
+      if (route === 'local') {
+        this.log.debug(message);
+      } else {
+        this.log.info(message);
+      }
       // An accepted command is not a confirmed state. While local events are
       // connected, retain the last snapshot and let the event update it.
       // Otherwise the next read must refresh as before.
@@ -523,21 +522,13 @@ export class MultiServiceAccessory {
       }
       return true;
     } catch (error) {
+      if (error instanceof LocalHubUnavailableError) {
+        throw error;
+      }
       this.log.error(`${JSON.stringify(commands)} failed for ${this.name}: ${error}`);
       return false;
     } finally {
       this.commandInProgress = false;
-      if (transportTiming) {
-        const ms = (value?: number) => value === undefined ? 'n/a' : value.toFixed(1);
-        try {
-          this.log.info(`Local switch timing start=${new Date(startedAt).toISOString()} device=${JSON.stringify(this.name)} ` +
-            `component=${JSON.stringify(commands[0].component ?? componentId ?? 'main')} command=${commands[0].command} ` +
-            `outcome=${accepted ? 'accepted' : 'failed'} deviceQueueMs=${ms(commandQueueMs)} ` +
-            `hubQueueMs=${ms(transportTiming.queueMs)} prepareMs=${ms(transportTiming.prepareMs)} ` +
-            `connectMs=${ms(transportTiming.connectMs)} responseMs=${ms(transportTiming.responseMs)} ` +
-            `totalMs=${ms(performance.now() - started)}`);
-        } catch { /* Diagnostics must not affect command handling. */ }
-      }
     }
   }
 

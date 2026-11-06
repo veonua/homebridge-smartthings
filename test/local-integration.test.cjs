@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { IKHomeBridgeHomebridgePlatform } = require('../dist/platform');
 const { MultiServiceAccessory } = require('../dist/multiServiceAccessory');
+const { LocalHubUnavailableError } = require('../dist/localHubClient');
 
 const device = (id, label = id, locationId = 'location') => ({
   deviceId: id, label, locationId, manufacturerName: 'Example',
@@ -40,6 +41,55 @@ function setup(t, overrides = {}) {
 function cache(directory, devices) {
   fs.writeFileSync(path.join(directory, 'smartthings-device-metadata.json'), JSON.stringify(devices));
 }
+
+test('local network outages preserve device state and failure counts and report a HomeKit communication error', async t => {
+  const f = setup(t);
+  f.platform.localDeviceIds = new Set(['a']);
+  const failure = new LocalHubUnavailableError('ENETUNREACH', Date.now() + 30000);
+  f.platform.localHub.get = async () => { throw failure; };
+  const snapshot = status('on').components.main;
+  const handler = Object.create(MultiServiceAccessory.prototype);
+  Object.assign(handler, { platform: f.platform, accessory: { UUID: 'a' }, name: 'Local lamp', log: f.platform.log,
+    online: true, failureCount: 4, deviceStatusTimestamp: 0, commandInProgress: false, statusQueryInProgress: false,
+    components: [{ componentId: 'main', capabilities: ['switch'], status: snapshot }] });
+  for (let i = 0; i < 8; i++) assert.equal(await handler.refreshStatus(), false);
+  assert.equal(handler.failureCount, 4);
+  assert.equal(handler.isOnline(), true, 'a network outage does not declare the lamp offline');
+  assert.equal(handler.deviceStatusTimestamp, 0, 'the stale snapshot is not marked fresh');
+  assert.equal(handler.components[0].status, snapshot);
+  assert.deepEqual(f.cloudCalls, [], 'a local network failure is reported directly');
+  assert.equal(f.messages.filter(m => m.level === 'warn' || m.level === 'error').length, 0,
+    'per-device warnings do not duplicate the client connection warning');
+  const { SwitchService } = require('../dist/services/switchService');
+  const service = Object.create(SwitchService.prototype);
+  class HapStatusError extends Error { constructor(code) { super('HAP failure'); this.code = code; } }
+  f.api.hap.HapStatusError = HapStatusError;
+  f.api.hap.HAPStatus = { SERVICE_COMMUNICATION_FAILURE: -70402 };
+  Object.assign(service, { platform: f.platform, multiServiceAccessory: handler, componentId: 'main',
+    deviceStatus: { status: snapshot }, log: f.platform.log });
+  await assert.rejects(service.getSwitchState(), error => error instanceof HapStatusError && error.code === -70402);
+  handler.platform = { getDeviceData: async () => { throw new Error('Invalid local status'); } };
+  assert.equal(await handler.refreshStatus(), false);
+  assert.equal(handler.failureCount, 5, 'ordinary device failures retain their existing handling');
+  assert.equal(handler.isOnline(), false);
+});
+
+test('a local discovery outage preserves known IDs and protects requests when IDs are unknown', async t => {
+  const f = setup(t);
+  const failure = new LocalHubUnavailableError('ENETUNREACH', Date.now() + 30000);
+  const ids = new Set(['a']);
+  f.platform.localDeviceIds = ids;
+  f.platform.localHub.getDeviceIds = async () => { throw failure; };
+  f.platform.localHub.unavailableError = failure;
+  await f.platform.refreshLocalDeviceIds();
+  assert.equal(f.platform.localDeviceIds, ids);
+  assert.equal(f.platform.localDiscoveryRetryAt, failure.retryAt);
+  f.platform.localDeviceIds = undefined;
+  await assert.rejects(f.platform.getDeviceData('a', 'status'), LocalHubUnavailableError);
+  await assert.rejects(f.platform.sendDeviceCommands('a', [{ capability: 'switch', command: 'on' }]), LocalHubUnavailableError);
+  assert.deepEqual(f.cloudCalls, []);
+  assert.equal(f.messages.filter(m => m.level === 'warn' || m.level === 'error').length, 0);
+});
 
 test('initial discovery fetches cloud metadata and subsequent discovery uses cached metadata', async t => {
   const f = setup(t);

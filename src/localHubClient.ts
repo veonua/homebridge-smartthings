@@ -3,7 +3,6 @@ import { promises as fs } from 'node:fs';
 import http2, { ClientHttp2Session, ClientHttp2Stream } from 'node:http2';
 import { isIP } from 'node:net';
 import { TLSSocket } from 'node:tls';
-import { performance } from 'node:perf_hooks';
 
 interface HubCredentials {
   hubId: string;
@@ -18,6 +17,42 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_CONCURRENT_REQUESTS = 6;
 const MAX_COMMAND_BYTES = 64 * 1024;
 const MAX_COMMANDS = 32;
+const NETWORK_RETRY_MS = 30000;
+const NETWORK_ERRORS = new Set(['ENETUNREACH', 'EHOSTUNREACH', 'ENETDOWN', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE']);
+
+function networkErrorCode(error: unknown, seen = new Set<object>()): string | undefined {
+  if (!error || typeof error !== 'object' || seen.has(error)) {
+    return undefined;
+  }
+  seen.add(error);
+  const failure = error as { code?: unknown; cause?: unknown; errors?: unknown };
+  if (typeof failure.code === 'string' && NETWORK_ERRORS.has(failure.code)) {
+    return failure.code;
+  }
+  const cause = networkErrorCode(failure.cause, seen);
+  if (cause) {
+    return cause;
+  }
+  if (Array.isArray(failure.errors) && failure.errors.length) {
+    const codes = failure.errors.map(item => networkErrorCode(item, new Set(seen)));
+    // Do not hide an unrelated error mixed into an AggregateError.
+    if (codes.every(code => code !== undefined)) {
+      return codes[0];
+    }
+  }
+  return undefined;
+}
+
+export class LocalHubUnavailableError extends Error {
+  constructor(public readonly code: string, public readonly retryAt: number) {
+    super(`Local hub temporarily unavailable (${code})`);
+  }
+}
+
+interface ConnectionCallbacks {
+  onUnavailable?: (code: string) => void;
+  onRestored?: (durationMs: number) => void;
+}
 
 export class LocalHubHttpError extends Error {
   constructor(public readonly statusCode: number) {
@@ -32,13 +67,6 @@ export interface LocalHubCommand {
   arguments?: unknown[];
 }
 
-export interface LocalCommandTiming {
-  queueMs?: number;
-  prepareMs?: number;
-  connectMs?: number;
-  responseMs?: number;
-}
-
 /** Client for the SmartThings hub's local API. */
 export class LocalHubClient {
   private activeRequests = 0;
@@ -46,9 +74,43 @@ export class LocalHubClient {
   private readonly waitingReads: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
   private connection: { key: string; session: ClientHttp2Session; ready: Promise<ClientHttp2Session> } | undefined;
   private readonly sessions = new Set<ClientHttp2Session>();
+  private readonly sessionFailures = new WeakMap<ClientHttp2Session, LocalHubUnavailableError>();
+  private outage: { code: string; since: number; retryAt: number } | undefined;
   private closed = false;
 
-  constructor(private readonly tokenFile: string) {}
+  constructor(private readonly tokenFile: string, private readonly callbacks: ConnectionCallbacks = {}) {}
+
+  get unavailableError(): LocalHubUnavailableError | undefined {
+    return this.outage ? new LocalHubUnavailableError(this.outage.code, this.outage.retryAt) : undefined;
+  }
+
+  private unavailable(code: string): LocalHubUnavailableError {
+    const first = !this.outage;
+    const now = Date.now();
+    this.outage = { code, since: this.outage?.since ?? now, retryAt: now + NETWORK_RETRY_MS };
+    if (first && !this.closed) {
+      try {
+        this.callbacks.onUnavailable?.(code);
+      } catch { /* Logging must not affect requests. */ }
+    }
+    return this.unavailableError!;
+  }
+
+  private restored(): void {
+    if (this.outage && !this.closed) {
+      const durationMs = Math.max(0, Date.now() - this.outage.since);
+      this.outage = undefined;
+      try {
+        this.callbacks.onRestored?.(durationMs);
+      } catch { /* Logging must not affect requests. */ }
+    }
+  }
+
+  private checkAvailability(): void {
+    if (this.outage && Date.now() < this.outage.retryAt) {
+      throw this.unavailableError;
+    }
+  }
 
   close(): void {
     this.closed = true;
@@ -66,7 +128,7 @@ export class LocalHubClient {
   }
 
   /** A successful response means the hub accepted every command, not that a device has acted. */
-  async executeCommands(deviceId: string, commands: LocalHubCommand[], onTiming?: (timing: LocalCommandTiming) => void): Promise<void> {
+  async executeCommands(deviceId: string, commands: LocalHubCommand[]): Promise<void> {
     if (typeof deviceId !== 'string' || !/^[a-z0-9_-]{1,128}$/i.test(deviceId) ||
       !Array.isArray(commands) || commands.length === 0 || commands.length > MAX_COMMANDS ||
       commands.some(command => !command || typeof command.capability !== 'string' || !command.capability ||
@@ -89,30 +151,21 @@ export class LocalHubClient {
       throw new Error('Local hub command exceeded size limit');
     }
     // Never retry a POST: even an interrupted response may have applied the command.
-    const timing: LocalCommandTiming | undefined = onTiming ? {} : undefined;
-    try {
-      const response = await this.request<{ results?: unknown }>(
-        'POST', `/devices/${encodeURIComponent(deviceId)}/commands`, body, timing);
-      if (!response || !Array.isArray(response.results) || response.results.length !== commands.length ||
-        response.results.some(result => !result || typeof result !== 'object' ||
-          typeof result.id !== 'string' || !result.id ||
-          (result.status !== 'ACCEPTED' && result.status !== 'COMPLETED'))) {
-        throw new Error('Local hub did not accept every command');
-      }
-    } finally {
-      if (onTiming && timing) {
-        try {
-          onTiming(timing);
-        } catch { /* Diagnostic callbacks must not change command outcomes. */ }
-      }
+    const response = await this.request<{ results?: unknown }>(
+      'POST', `/devices/${encodeURIComponent(deviceId)}/commands`, body);
+    if (!response || !Array.isArray(response.results) || response.results.length !== commands.length ||
+      response.results.some(result => !result || typeof result !== 'object' ||
+        typeof result.id !== 'string' || !result.id ||
+        (result.status !== 'ACCEPTED' && result.status !== 'COMPLETED'))) {
+      throw new Error('Local hub did not accept every command');
     }
   }
 
-  private async request<T>(method: 'GET' | 'POST', path: string, body?: string, timing?: LocalCommandTiming): Promise<T> {
+  private async request<T>(method: 'GET' | 'POST', path: string, body?: string): Promise<T> {
     if (this.closed) {
       throw new Error('Local hub client closed');
     }
-    const queuedAt = performance.now();
+    this.checkAvailability();
     if (this.activeRequests >= MAX_CONCURRENT_REQUESTS) {
       await new Promise<void>((resolve, reject) => {
         (method === 'POST' ? this.waitingCommands : this.waitingReads).push({ resolve, reject });
@@ -120,14 +173,19 @@ export class LocalHubClient {
     } else {
       this.activeRequests++;
     }
-    if (timing) {
-      timing.queueMs = performance.now() - queuedAt;
-    }
     try {
       if (this.closed) {
         throw new Error('Local hub client closed');
       }
-      return await this.requestOnce<T>(method, path, body, timing);
+      this.checkAvailability();
+      const result = await this.requestOnce<T>(method, path, body);
+      this.restored();
+      return result;
+    } catch (error) {
+      if (error instanceof LocalHubHttpError) {
+        this.restored();
+      }
+      throw error;
     } finally {
       const next = this.waitingCommands.shift() ?? this.waitingReads.shift();
       if (next) {
@@ -138,10 +196,11 @@ export class LocalHubClient {
     }
   }
 
-  private sessionFor(origin: string, servername: string, certificate: X509Certificate, ca: string): Promise<ClientHttp2Session> {
+  private async sessionFor(origin: string, servername: string, certificate: X509Certificate, ca: string): Promise<ClientHttp2Session> {
     if (this.closed) {
       return Promise.reject(new Error('Local hub client closed'));
     }
+    this.checkAvailability();
     // Tokens authenticate individual streams, not the TLS session. A changed
     // destination or pinned certificate must always create a new session.
     const key = JSON.stringify([origin, servername, certificate.fingerprint256]);
@@ -160,33 +219,40 @@ export class LocalHubClient {
       }
     };
     const ready = new Promise<ClientHttp2Session>((resolve, reject) => {
-      const fail = (message: string) => {
+      const fail = (error: Error) => {
         clearTimeout(timer);
         invalidate();
-        reject(new Error(message));
+        reject(error);
       };
       const timer = setTimeout(() => {
-        fail('Local hub connection timed out');
+        const error = this.unavailable('ETIMEDOUT');
+        this.sessionFailures.set(session, error);
+        fail(error);
         session.destroy();
       }, REQUEST_TIMEOUT_MS);
       // Keep underlying TLS errors and credentials out of public error messages.
-      session.on('error', () => {
-        fail('Local hub connection failed');
+      session.on('error', error => {
+        const code = networkErrorCode(error);
+        const failure = code ? this.unavailable(code) : new Error('Local hub connection failed');
+        if (failure instanceof LocalHubUnavailableError) {
+          this.sessionFailures.set(session, failure);
+        }
+        fail(failure);
         session.destroy();
       });
       session.once('goaway', () => {
-        fail('Local hub connection closed');
+        fail(new Error('Local hub connection closed'));
         this.retireSession(session);
       });
       session.once('close', () => {
-        fail('Local hub connection closed');
+        fail(new Error('Local hub connection closed'));
         this.sessions.delete(session);
       });
       session.once('connect', () => {
         const socket = session.socket as TLSSocket;
         if (!socket.authorized || socket.alpnProtocol !== 'h2' ||
           socket.getPeerCertificate().fingerprint256 !== certificate.fingerprint256) {
-          fail('Local hub TLS verification failed');
+          fail(new Error('Local hub TLS verification failed'));
           session.destroy();
           return;
         }
@@ -210,8 +276,7 @@ export class LocalHubClient {
     session.once('close', () => clearTimeout(timer));
   }
 
-  private async requestOnce<T>(method: 'GET' | 'POST', path: string, body?: string, timing?: LocalCommandTiming): Promise<T> {
-    const preparingAt = performance.now();
+  private async requestOnce<T>(method: 'GET' | 'POST', path: string, body?: string): Promise<T> {
     // Only relative API paths are allowed; never forward the token to a URL.
     if (!path.startsWith('/') || path.startsWith('//') || /[\r\n]/.test(path)) {
       throw new Error('Invalid local hub API path');
@@ -247,25 +312,14 @@ export class LocalHubClient {
     const host = isIP(credentials.hubHost) === 6 ? `[${credentials.hubHost}]` : credentials.hubHost;
     const origin = `https://${host}:${credentials.hubPort ?? 8766}`;
 
-    if (timing) {
-      timing.prepareMs = performance.now() - preparingAt;
-    }
     return new Promise<T>((resolve, reject) => {
       let settled = false;
-      const connectingAt = performance.now();
-      let sentAt: number | undefined;
       let request: ClientHttp2Stream | undefined;
       const finish = (error?: Error, value?: T) => {
         if (settled) {
           return;
         }
         settled = true;
-        if (timing && timing.connectMs === undefined) {
-          timing.connectMs = performance.now() - connectingAt;
-        }
-        if (timing && sentAt !== undefined) {
-          timing.responseMs = performance.now() - sentAt;
-        }
         clearTimeout(timer);
         if (error) {
           request?.destroy();
@@ -278,9 +332,6 @@ export class LocalHubClient {
       this.sessionFor(origin, servername, certificate, credentials.public_certificate).then(session => {
         if (settled) {
           return;
-        }
-        if (timing) {
-          timing.connectMs = performance.now() - connectingAt;
         }
         try {
           request = session.request({
@@ -309,11 +360,14 @@ export class LocalHubClient {
             chunks.push(chunk);
           }
         });
-        request.on('error', () => finish(new Error('Local hub request failed')));
-        request.on('close', () => finish(new Error('Local hub request closed')));
+        request.on('error', error => {
+          const code = networkErrorCode(error);
+          finish(this.sessionFailures.get(session) ?? (code ? this.unavailable(code) : new Error('Local hub request failed')));
+        });
+        request.on('close', () => finish(this.sessionFailures.get(session) ?? new Error('Local hub request closed')));
         request.on('end', () => {
           if (!status) {
-            finish(new Error('Local hub request closed'));
+            finish(this.sessionFailures.get(session) ?? new Error('Local hub request closed'));
             return;
           }
           if (status < 200 || status >= 300) {
@@ -326,7 +380,6 @@ export class LocalHubClient {
             finish(new Error('Local hub returned invalid JSON'));
           }
         });
-        sentAt = performance.now();
         request.end(body);
       }).catch(error => finish(error));
     });

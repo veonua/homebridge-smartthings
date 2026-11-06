@@ -1,13 +1,13 @@
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { once } = require('node:events');
+const { once, EventEmitter } = require('node:events');
 const fs = require('node:fs/promises');
 const http2 = require('node:http2');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const tls = require('node:tls');
-const { LocalHubClient } = require('../dist/localHubClient');
+const { LocalHubClient, LocalHubUnavailableError } = require('../dist/localHubClient');
 
 const hubId = '11111111-2222-3333-4444-555555555555';
 const tlsName = `svc-hla-tcp.hub-${hubId}.smartthings`;
@@ -128,7 +128,6 @@ test('commands use the pinned HTTP/2 connection and validate every result withou
   let reply = { results: [{ id: 'result-1', status: 'ACCEPTED' }] };
   let httpStatus = 200;
   let abort = false;
-  let delayMs = 0;
   const server = http2.createSecureServer({ key: await fs.readFile(trusted.key), cert: trustedPem });
   server.on('sessionError', () => {});
   server.on('stream', (stream, headers) => {
@@ -141,11 +140,8 @@ test('commands use the pinned HTTP/2 connection and validate every result withou
         stream.close(http2.constants.NGHTTP2_INTERNAL_ERROR);
         return;
       }
-      const respond = () => {
-        stream.respond({ ':status': httpStatus, 'content-type': 'application/json' });
-        stream.end(JSON.stringify(reply));
-      };
-      if (delayMs) setTimeout(respond, delayMs); else respond();
+      stream.respond({ ':status': httpStatus, 'content-type': 'application/json' });
+      stream.end(JSON.stringify(reply));
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -155,16 +151,7 @@ test('commands use the pinned HTTP/2 connection and validate every result withou
   const client = new LocalHubClient(tokenFile);
   t.after(() => { client.close(); return new Promise(resolve => server.close(resolve)); });
 
-  const timings = [];
-  delayMs = 80;
-  await client.executeCommands('device-1', [{ capability: 'switch', command: 'on' }], timing => timings.push(timing));
-  delayMs = 0;
-  assert.equal(timings.length, 1);
-  for (const field of ['queueMs', 'prepareMs', 'connectMs', 'responseMs']) {
-    assert.ok(Number.isFinite(timings[0][field]) && timings[0][field] >= 0, field);
-  }
-  assert.ok(timings[0].responseMs >= 60, 'server delay must be measured in response time');
-  assert.doesNotMatch(JSON.stringify(timings), /command-test-token/);
+  await client.executeCommands('device-1', [{ capability: 'switch', command: 'on' }]);
   assert.equal(requests[0].headers[':method'], 'POST');
   assert.equal(requests[0].headers[':path'], '/devices/device-1/commands');
   assert.equal(requests[0].headers.authorization, 'Bearer command-test-token');
@@ -175,11 +162,11 @@ test('commands use the pinned HTTP/2 connection and validate every result withou
   ] });
   reply = { results: [{ id: 'one', status: 'COMPLETED' }, { id: 'two', status: 'ACCEPTED' }] };
   await client.executeCommands('device-1', [
-    { component: 'secondary', capability: 'switchLevel', command: 'setLevel', arguments: [30] },
+    { component: 'secondary', capability: 'switchLevel', command: 'setLevel', arguments: [30, 0] },
     { capability: 'switch', command: 'on' },
   ]);
   assert.equal(requests[1].body.commands[0].component, 'secondary');
-  assert.deepEqual(requests[1].body.commands[0].arguments, [30]);
+  assert.deepEqual(requests[1].body.commands[0].arguments, [30, 0], 'the JSON request preserves an explicit zero rate');
 
   for (const invalidReply of [
     {}, { results: [] }, { results: [{ id: 'one', status: 'FAILED' }] },
@@ -196,9 +183,8 @@ test('commands use the pinned HTTP/2 connection and validate every result withou
     arguments: ['x'.repeat(65536)] }]), /size limit/);
   assert.equal(requests.length, beforeValidation);
   httpStatus = 403;
-  await assert.rejects(client.executeCommands('device-1', [{ capability: 'switch', command: 'on' }], timing => timings.push(timing)),
+  await assert.rejects(client.executeCommands('device-1', [{ capability: 'switch', command: 'on' }]),
     { message: 'Local hub returned HTTP 403', statusCode: 403 });
-  assert.equal(timings.length, 2, 'failed commands also report timings');
   assert.equal(requests.length, beforeValidation + 1, 'a forbidden POST must not be retried');
   httpStatus = 200;
   abort = true;
@@ -214,7 +200,7 @@ async function until(predicate, label) {
   }
 }
 
-async function hubFixture(t, handler) {
+async function hubFixture(t, handler, callbacks = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'local-hub-shared-'));
   const trusted = makeCertificate(dir, 'shared');
   const credentials = { hubId, hubHost: '127.0.0.1', access_token: 'shared-test-token',
@@ -240,7 +226,7 @@ async function hubFixture(t, handler) {
   credentials.hubPort = server.address().port;
   const tokenFile = path.join(dir, 'hub.json');
   await fs.writeFile(tokenFile, JSON.stringify(credentials));
-  const client = new LocalHubClient(tokenFile);
+  const client = new LocalHubClient(tokenFile, callbacks);
   t.after(async () => {
     client.close();
     for (const session of sessions) session.destroy();
@@ -379,4 +365,92 @@ test('a request timeout cancels only its stream and leaves the connection usable
   await f.client.executeCommands('after-timeout', switchOn);
   assert.equal(f.sessions.length, 1, 'a timeout does not discard other devices shared connection');
   assert.equal(f.requests.length, 4, 'the timed out request is not replayed');
+});
+
+function failedConnection(error) {
+  const session = new EventEmitter();
+  session.destroy = () => {
+    if (!session.destroyed) {
+      session.destroyed = true;
+      process.nextTick(() => session.emit('close'));
+    }
+  };
+  session.close = session.destroy;
+  process.nextTick(() => session.emit('error', error));
+  return session;
+}
+
+test('one nested network outage pauses a burst, warns once, and recovers on demand without replaying commands', async t => {
+  const warnings = [], recovered = [];
+  const f = await hubFixture(t, request => request.respond(), {
+    onUnavailable: code => warnings.push(code), onRestored: duration => recovered.push(duration),
+  });
+  let clock = Date.now(), failures = true, attempts = 0;
+  t.mock.method(Date, 'now', () => clock);
+  const connect = http2.connect;
+  const systemError = Object.assign(new Error('private host and shared-test-token'), { code: 'ENETUNREACH' });
+  const error = new Error('private aggregate details', { cause: new AggregateError([systemError, systemError]) });
+  t.mock.method(http2, 'connect', (...args) => {
+    attempts++;
+    return failures ? failedConnection(error) : connect(...args);
+  });
+  const initial = [f.client.executeCommands('original', switchOn), ...Array.from({ length: 20 }, () => f.client.get('/devices'))];
+  const results = await Promise.allSettled(initial);
+  for (const result of results) {
+    assert.equal(result.status, 'rejected');
+    assert.ok(result.reason instanceof LocalHubUnavailableError);
+    assert.equal(result.reason.code, 'ENETUNREACH');
+    assert.doesNotMatch(String(result.reason), /private|token|AggregateError/);
+  }
+  assert.equal(attempts, 1, 'only one shared handshake is attempted during the burst');
+  assert.deepEqual(warnings, ['ENETUNREACH']);
+  await assert.rejects(f.client.get('/paused'), LocalHubUnavailableError);
+  await assert.rejects(f.client.executeCommands('paused', switchOn), LocalHubUnavailableError);
+  assert.equal(attempts, 1, 'reads and commands fail immediately during the 30-second pause');
+  clock += 5001;
+  await assert.rejects(f.client.get('/still-paused'), LocalHubUnavailableError);
+  assert.equal(attempts, 1, 'five seconds is not enough to start another connection');
+  clock += 25000;
+  await assert.rejects(f.client.get('/still-down'), LocalHubUnavailableError);
+  assert.equal(attempts, 2);
+  assert.deepEqual(warnings, ['ENETUNREACH'], 'a failed probe does not repeat the warning');
+  clock += 30001;
+  failures = false;
+  await Promise.all([f.client.get('/recovered'), f.client.get('/also-recovered')]);
+  assert.equal(attempts, 3);
+  assert.deepEqual(recovered, [60002], 'a successful request reports recovery only once');
+  assert.equal(f.client.unavailableError, undefined);
+  assert.equal(f.requests.length, 2);
+  assert.ok(f.requests.every(r => r.headers[':method'] === 'GET'), 'commands rejected during the outage are never replayed');
+  await f.client.executeCommands('new', switchOn);
+  assert.equal(f.requests[2].headers[':path'], '/devices/new/commands');
+});
+
+test('TLS failures and mixed or cyclic error causes are not hidden as network outages', async t => {
+  const warnings = [];
+  const f = await hubFixture(t, undefined, { onUnavailable: code => warnings.push(code) });
+  const unreachable = Object.assign(new Error('private address'), { code: 'ENETUNREACH' });
+  const tlsError = Object.assign(new Error('private certificate'), { code: 'CERT_HAS_EXPIRED' });
+  const cyclic = new Error('private cyclic details');
+  cyclic.cause = cyclic;
+  let error;
+  t.mock.method(http2, 'connect', () => failedConnection(error));
+  for (error of [tlsError, new AggregateError([unreachable, tlsError]), cyclic]) {
+    await assert.rejects(f.client.get('/devices'), { message: 'Local hub connection failed' });
+    assert.equal(f.client.unavailableError, undefined);
+  }
+  assert.deepEqual(warnings, []);
+});
+
+test('a network failure on an active shared session rejects commands once with a typed error', async t => {
+  const warnings = [];
+  const f = await hubFixture(t, undefined, { onUnavailable: code => warnings.push(code) });
+  const commands = Promise.allSettled([f.client.executeCommands('a', switchOn), f.client.executeCommands('b', switchOn)]);
+  await until(() => f.requests.length === 2, 'both commands sent before the connection fails');
+  f.client.connection.session.destroy(Object.assign(new Error('private network detail'), { code: 'ENETUNREACH' }));
+  const results = await commands;
+  assert.ok(results.every(r => r.status === 'rejected' && r.reason instanceof LocalHubUnavailableError));
+  assert.deepEqual(warnings, ['ENETUNREACH']);
+  assert.equal(f.requests.length, 2, 'uncertain commands are never replayed');
+  await assert.rejects(f.client.get('/paused'), LocalHubUnavailableError);
 });

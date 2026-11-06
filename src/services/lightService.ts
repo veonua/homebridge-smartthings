@@ -4,6 +4,15 @@ import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 import { ShortEvent } from '../shortEvent';
 import { Command } from './smartThingsCommand';
+import { LocalHubUnavailableError } from '../localHubClient';
+
+interface BrightnessTarget {
+  value: number;
+  dispatched: boolean;
+  confirmed: boolean;
+}
+
+const BRIGHTNESS_CONFIRMATION_MS = 2000;
 
 export class LightService extends BaseService {
 
@@ -12,6 +21,13 @@ export class LightService extends BaseService {
   private pendingAdaptive?: { mired: number; time: number };
   private expectedAdaptive?: { kelvin: number; time: number };
   private adaptiveWriteInProgress = false;
+  private brightnessTarget?: BrightnessTarget;
+  private brightnessInProgress = false;
+  private brightnessConfirmation?: NodeJS.Timeout;
+  private brightnessEpoch = 0;
+  private powerRevision = 0;
+  private offInProgress = false;
+  private awaitingOff = false;
 
   // There is a device that can't handle sethue and setsaturation separately and requires both
   // args using setcolor.
@@ -86,7 +102,26 @@ export class LightService extends BaseService {
 
   async setSwitchState(value: CharacteristicValue): Promise<void> {
     this.log.debug('Received setSwitchState(' + value + ') event for ' + this.name);
-    await this.sendCommandOrFail('switch', value ? 'on' : 'off');
+    const revision = this.powerRevision = (this.powerRevision ?? 0) + 1;
+    this.offInProgress = !value;
+    this.awaitingOff = !value;
+    if (!value) {
+      this.brightnessEpoch++;
+      this.clearBrightnessTarget();
+      this.pendingAdaptive = undefined;
+    }
+    try {
+      await this.sendCommandOrFail('switch', value ? 'on' : 'off');
+    } catch (error) {
+      if (this.powerRevision === revision) {
+        this.awaitingOff = false;
+      }
+      throw error;
+    } finally {
+      if (this.powerRevision === revision) {
+        this.offInProgress = false;
+      }
+    }
   }
 
   async getSwitchState(): Promise<CharacteristicValue> {
@@ -94,11 +129,110 @@ export class LightService extends BaseService {
   }
 
   async setLevel(value: CharacteristicValue): Promise<void> {
-    await this.sendCommandOrFail('switchLevel', 'setLevel', [value]);
+    if (!this.platform.isKnownLocalDevice?.(this.accessory.UUID)) {
+      return this.sendCommandOrFail('switchLevel', 'setLevel', [value]);
+    }
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.INVALID_VALUE_IN_REQUEST);
+    }
+    // HomeKit sends On=false to turn the light off and can repeat Brightness=0 after it.
+    if (value === 0 || this.offInProgress || this.brightnessTarget?.value === value) {
+      return;
+    }
+    this.awaitingOff = false;
+    this.clearBrightnessTarget();
+    this.brightnessTarget = { value, dispatched: false, confirmed: false };
+    void this.sendLatestBrightness();
   }
 
   async getLevel(): Promise<CharacteristicValue> {
-    return this.statusValue<number>('switchLevel', 'level');
+    return this.brightnessTarget?.value ?? this.statusValue<number>('switchLevel', 'level');
+  }
+
+  private clearBrightnessTarget(): void {
+    clearTimeout(this.brightnessConfirmation);
+    this.brightnessConfirmation = undefined;
+    this.brightnessTarget = undefined;
+  }
+
+  private async sendLatestBrightness(): Promise<void> {
+    if (this.brightnessInProgress) {
+      return;
+    }
+    this.brightnessInProgress = true;
+    try {
+      while (this.brightnessTarget && !this.brightnessTarget.dispatched) {
+        const epoch = this.brightnessEpoch;
+        let target = this.brightnessTarget;
+        // Use zero transition time so each HomeKit slider step does not start a lamp-side fade.
+        const args = [target.value, 0];
+        const command = new Command('switchLevel', 'setLevel', args, this.componentId);
+        let accepted = false;
+        try {
+          accepted = await this.multiServiceAccessory.sendCommands([command], undefined, true, () => {
+            if (this.brightnessEpoch !== epoch || !this.brightnessTarget || this.offInProgress) {
+              return false;
+            }
+            target = this.brightnessTarget;
+            target.dispatched = true;
+            args[0] = target.value;
+            return true;
+          });
+        } catch (error) {
+          this.log.debug(`Local brightness write failed for ${this.name}: ${error}`);
+        }
+        if (this.brightnessTarget !== target) {
+          continue;
+        }
+        if (!accepted) {
+          void this.reconcileBrightness(target);
+        } else if (target.confirmed) {
+          this.clearBrightnessTarget();
+        } else {
+          this.brightnessConfirmation = setTimeout(() => void this.reconcileBrightness(target), BRIGHTNESS_CONFIRMATION_MS);
+          this.brightnessConfirmation.unref();
+        }
+        break;
+      }
+    } finally {
+      this.brightnessInProgress = false;
+    }
+  }
+
+  private async reconcileBrightness(target: BrightnessTarget): Promise<void> {
+    const beforeRead = this.deviceStatus.status?.switchLevel?.level;
+    let level: number | undefined;
+    try {
+      const status = await this.platform.getLocalStatus(this.accessory.UUID);
+      if (this.brightnessTarget !== target) {
+        return;
+      }
+      const attribute = status?.components?.[this.componentId]?.switchLevel?.level;
+      const current = this.deviceStatus.status?.switchLevel?.level;
+      this.clearBrightnessTarget();
+      if (current !== beforeRead) {
+        level = current?.value;
+      } else if (typeof attribute?.value === 'number' && Number.isFinite(attribute.value) &&
+        attribute.value >= 0 && attribute.value <= 100) {
+        this.multiServiceAccessory.processEvent({ deviceId: this.accessory.UUID, componentId: this.componentId,
+          capability: 'switchLevel', attribute: 'level', value: attribute.value,
+          eventTime: typeof attribute.timestamp === 'string' ? Date.parse(attribute.timestamp) : undefined });
+        level = this.deviceStatus.status?.switchLevel?.level?.value;
+      }
+    } catch (error) {
+      if (this.brightnessTarget !== target) {
+        return;
+      }
+      this.log.debug(`Could not reconcile local brightness for ${this.name}: ${error}`);
+      this.clearBrightnessTarget();
+    }
+    if (typeof level === 'number' && Number.isFinite(level)) {
+      this.service.updateCharacteristic(this.platform.Characteristic.Brightness, level);
+    } else {
+      this.multiServiceAccessory.forceNextStatusRefresh();
+      this.service.updateCharacteristic(this.platform.Characteristic.Brightness,
+        new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
+    }
   }
 
   async setColorTemp(value: CharacteristicValue, context?: { controller?: unknown }): Promise<void> {
@@ -143,7 +277,9 @@ export class LightService extends BaseService {
 
   private async applyAdaptiveTemperature(): Promise<void> {
     const pending = this.pendingAdaptive;
+    const revision = this.powerRevision;
     if (this.adaptiveWriteInProgress || !pending || !this.adaptiveLighting?.isAdaptiveLightingActive() ||
+      this.awaitingOff || this.offInProgress ||
       Date.now() - pending.time > 90000 ||
       this.deviceStatus?.status?.switch?.switch?.value !== 'on') {
       return;
@@ -153,7 +289,7 @@ export class LightService extends BaseService {
       const status = await this.platform.getLocalStatus(this.accessory.UUID);
       if (status?.components?.[this.componentId]?.switch?.switch?.value !== 'on' ||
         this.deviceStatus?.status?.switch?.switch?.value !== 'on' ||
-        !this.adaptiveLighting?.isAdaptiveLightingActive() || this.pendingAdaptive !== pending) {
+        !this.adaptiveLighting?.isAdaptiveLightingActive() || this.pendingAdaptive !== pending || this.powerRevision !== revision) {
         return;
       }
       this.updateColorTemperatureRange();
@@ -165,11 +301,19 @@ export class LightService extends BaseService {
       this.pendingAdaptive = undefined;
       const success = await this.multiServiceAccessory.sendCommands(
         [new Command('colorTemperature', 'setColorTemperature', [kelvin], this.componentId)], undefined, true,
+        () => this.powerRevision === revision && !this.awaitingOff && !this.offInProgress &&
+          this.deviceStatus?.status?.switch?.switch?.value === 'on',
       );
       if (!success) {
         this.expectedAdaptive = undefined;
+        if (this.powerRevision !== revision || this.deviceStatus?.status?.switch?.switch?.value !== 'on') {
+          return;
+        }
         throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
       }
+    } catch (error) {
+      this.expectedAdaptive = undefined;
+      throw error;
     } finally {
       this.adaptiveWriteInProgress = false;
     }
@@ -249,15 +393,32 @@ export class LightService extends BaseService {
   public processEvent(event: ShortEvent): void {
     switch (event.capability) {
       case 'switch': {
+        if (event.value === 'off') {
+          this.awaitingOff = false;
+        }
         this.log.debug(`Event updating switch capability for ${this.name} to ${event.value}`);
         this.service.updateCharacteristic(this.platform.Characteristic.On, event.value === 'on');
         if (event.value === 'on' && this.pendingAdaptive) {
-          void this.applyAdaptiveTemperature().catch(() => this.log.warn(`Adaptive Lighting command failed for ${this.name}`));
+          void this.applyAdaptiveTemperature().catch(error => {
+            if (!(error instanceof LocalHubUnavailableError)) {
+              this.log.warn(`Adaptive Lighting command failed for ${this.name}`);
+            }
+          });
         }
         return;
       }
 
       case 'switchLevel': {
+        const target = this.brightnessTarget;
+        if (target) {
+          target.confirmed = target.dispatched && event.value === target.value;
+          if (!target.confirmed) {
+            return;
+          }
+          if (!this.brightnessInProgress) {
+            this.clearBrightnessTarget();
+          }
+        }
         this.log.debug(`Event updating switchLevel capability for ${this.name} to ${event.value}`);
         this.service.updateCharacteristic(this.platform.Characteristic.Brightness, event.value);
         return;

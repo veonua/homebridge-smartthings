@@ -6,7 +6,7 @@ import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import axios = require('axios');
 //import { BasePlatformAccessory } from './basePlatformAccessory';
 import { MultiServiceAccessory } from './multiServiceAccessory';
-import { LocalHubClient, LocalHubCommand, LocalCommandTiming } from './localHubClient';
+import { LocalHubClient, LocalHubCommand, LocalHubUnavailableError } from './localHubClient';
 import { LocalHubEvents, LocalDeviceEvent, describeLocalHubEventsError } from './localHubEvents';
 import { HubTokenManager } from './hubTokenManager';
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
@@ -68,7 +68,13 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     });
     this.log.debug('Finished initializing platform:', this.config.name);
     if (typeof config.LocalHubTokenFile === 'string' && config.LocalHubTokenFile.trim()) {
-      this.localHub = new LocalHubClient(config.LocalHubTokenFile);
+      this.localHub = new LocalHubClient(config.LocalHubTokenFile, {
+        onUnavailable: code => this.log.warn(`Local hub unavailable (${code}); pausing requests for 30 seconds.`),
+        onRestored: durationMs => {
+          this.log.info(`Local hub connection restored after ${(durationMs / 1000).toFixed(1)} seconds.`);
+          void this.resyncAccessories(true);
+        },
+      });
       const localHub = this.localHub;
       this.api.on('shutdown', () => localHub.close());
       if (config.LocalHubAutoRenew === true) {
@@ -213,11 +219,15 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     }
     const device = this.accessoryObjects.find(accessory => accessory.id === event.deviceEvent.deviceId);
     const source = event.deviceEvent;
-    if (!device || !device.processEvent({
+    if (!device) {
+      return;
+    }
+    const applied = device.processEvent({
       deviceId: source.deviceId, componentId: source.componentId, capability: source.capability,
       attribute: source.attribute, value: source.value, eventId: source.eventId, eventTime: event.eventTime,
       unit: source.unit ?? undefined, data: source.data,
-    })) {
+    });
+    if (!applied) {
       return;
     }
     if (!this.localEventApplied) {
@@ -320,7 +330,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
    * It should be used to setup event handlers for characteristics and update respective values.
    */
   configureAccessory(accessory: PlatformAccessory) {
-    this.log.info('Loading accessory from cache:', accessory.displayName);
+    this.log.debug('Loading accessory from cache:', accessory.displayName);
 
     // add the restored accessory to the accessories cache so we can track if it has already been registered
     this.accessories.push(accessory);
@@ -381,6 +391,10 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
         this.localDiscoveryRetryAt = 0;
         this.log.info(`Local hub reports ${ids.size} devices`);
       }).catch(error => {
+        if (error instanceof LocalHubUnavailableError) {
+          this.localDiscoveryRetryAt = error.retryAt;
+          return;
+        }
         this.localDeviceIds = undefined;
         this.localDiscoveryRetryAt = Date.now() + 30000;
         this.log.warn(`Could not load the local device list; using cloud temporarily: ${error}`);
@@ -588,7 +602,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     const devices: Array<object> = [];
     items.forEach((device) => {
           if (device.type === 'MATTER') {
-            this.log.info(`Skipping Matter device ${device.label || device.deviceId}; it may already be in Apple Home`);
+            this.log.debug(`Skipping Matter device ${device.label || device.deviceId}; it may already be in Apple Home`);
             return;
           }
           // If an apostrophe is included in the name of the device in SmartThings, it comes over as a Right Single
@@ -632,6 +646,10 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     return !!this.localHub && (!this.localDeviceIds || this.localDeviceIds.has(deviceId));
   }
 
+  public isKnownLocalDevice(deviceId: string): boolean {
+    return !!this.localHub && this.localDeviceIds?.has(deviceId) === true;
+  }
+
   public hasLocalEventsFor(deviceId: string): boolean {
     return this.localEventsConnected && this.usesLocalReads(deviceId);
   }
@@ -644,8 +662,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   }
 
   /** Route a command once; an uncertain local result is never retried in the cloud. */
-  public async sendDeviceCommands(deviceId: string, commands: LocalHubCommand[], localOnly = false,
-    onTiming?: (timing: LocalCommandTiming) => void): Promise<'local' | 'cloud'> {
+  public async sendDeviceCommands(deviceId: string, commands: LocalHubCommand[], localOnly = false): Promise<'local' | 'cloud'> {
     if (this.removedDeviceIds.has(deviceId)) {
       throw new Error('Device no longer in the SmartThings catalog');
     }
@@ -655,14 +672,13 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
           await this.refreshLocalDeviceIds();
         }
         if (!this.localDeviceIds) {
+          if (this.localHub.unavailableError) {
+            throw this.localHub.unavailableError;
+          }
           throw new Error('Local device list unavailable');
         }
         if (this.localDeviceIds.has(deviceId)) {
-          if (onTiming) {
-            await this.localHub.executeCommands(deviceId, commands, onTiming);
-          } else {
-            await this.localHub.executeCommands(deviceId, commands);
-          }
+          await this.localHub.executeCommands(deviceId, commands);
           return 'local';
         }
       }
@@ -685,8 +701,12 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     if (this.localHub && !this.localDeviceIds && Date.now() >= this.localDiscoveryRetryAt) {
       await this.refreshLocalDeviceIds();
     }
+    if (this.localHub?.unavailableError && !this.localDeviceIds) {
+      throw this.localHub.unavailableError;
+    }
     const resourceKey = `${deviceId}:${resource}`;
-    if (this.localHub && this.localDeviceIds?.has(deviceId) && Date.now() >= (this.localResourceRetryAt.get(resourceKey) || 0)) {
+    if (this.localHub && this.localDeviceIds?.has(deviceId) &&
+      (this.localHub.unavailableError || Date.now() >= (this.localResourceRetryAt.get(resourceKey) || 0))) {
       try {
         const data = await this.localHub.get<T>(`/devices/${encodeURIComponent(deviceId)}/${resource}`);
         if (!data || (resource === 'status' && !(data as any).components) ||
@@ -697,6 +717,9 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
         this.log.debug(`Received local ${resource} for ${deviceId}`);
         return data;
       } catch (error) {
+        if (error instanceof LocalHubUnavailableError) {
+          throw error;
+        }
         this.refreshCatalogOnForbidden(deviceId, error);
         // A failing device or resource must not prevent other devices from using the hub.
         this.localResourceRetryAt.set(resourceKey, Date.now() + 30000);

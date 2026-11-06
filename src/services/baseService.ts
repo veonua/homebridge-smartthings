@@ -3,6 +3,7 @@ import { ShortEvent } from '../shortEvent';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 //import { BasePlatformAccessory } from '../basePlatformAccessory';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
+import { LocalHubUnavailableError } from '../localHubClient';
 
 export class BaseService {
   protected accessory: PlatformAccessory;
@@ -63,7 +64,10 @@ export class BaseService {
         if (await this.multiServiceAccessory.sendCommand(capability, command, args, this.componentId)) {
           return;
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof LocalHubUnavailableError) {
+          throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+        }
         // A rejected or uncertain command must be reported to HomeKit.
       }
     }
