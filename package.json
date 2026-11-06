@@ -19,7 +19,8 @@
   "main": "dist/index.js",
   "files": [
     "dist",
-    "config.schema.json"
+    "config.schema.json",
+    "lib/hub-token.mjs"
   ],
   "scripts": {
     "lint": "eslint src --max-warnings=0",
