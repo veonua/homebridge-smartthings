@@ -331,5 +331,4 @@ test('repeated malformed sensor status does not remove the service and later rec
   assert.equal(removed, 0);
   component.status = { motionSensor: { motion: { value: 'active' } } };
   assert.equal(await sensor.getSensorState(), 'active');
-  assert.equal(sensor.statusFailureCount, 0);
 });

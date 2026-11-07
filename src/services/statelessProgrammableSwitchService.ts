@@ -16,24 +16,6 @@ export class StatelessProgrammableSwitchService extends BaseService {
     this.log.debug(`Adding StatelessProgrammableSwitchService to ${this.name}`);
   }
 
-  // Set the target state of the lock
-  // async setSwitchState(value: CharacteristicValue) {
-  //   this.log.debug('Received setSwitchState(' + value + ') event for ' + this.name);
-
-  //   if (!this.multiServiceAccessory.isOnline) {
-  //     this.log.error(this.name + ' is offline');
-  //     throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-  //   }
-  //   this.multiServiceAccessory.sendCommand('switch', value ? 'on' : 'off').then((success) => {
-  //     if (success) {
-  //       this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-  //       this.deviceStatus.timestamp = 0;  // Force a refresh next query.
-  //     } else {
-  //       this.log.error(`Command failed for ${this.name}`);
-  //     }
-  //   });
-  // }
-
   public processEvent(event: ShortEvent): void {
     if (event.capability === 'button' && event.attribute === 'button' && typeof event.value === 'string') {
       this.log.debug(`Event updating button capability for ${this.name} to ${event.value}`);

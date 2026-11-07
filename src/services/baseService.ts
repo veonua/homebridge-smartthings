@@ -1,7 +1,6 @@
 import { PlatformAccessory, Logger, Service, WithUUID } from 'homebridge';
 import { ShortEvent } from '../shortEvent';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
-//import { BasePlatformAccessory } from '../basePlatformAccessory';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { LocalHubUnavailableError } from '../localHubClient';
 
@@ -25,7 +24,6 @@ export class BaseService {
 
     this.capabilities = capabilities;
     this.accessory = accessory;
-    // this.service = this.accessory.getService(platform.Service.MotionSensor) || this.accessory.addService(platform.Service.MotionSensor);
     this.platform = platform;
     this.log = platform.log;
     this.multiServiceAccessory = multiServiceAccessory;

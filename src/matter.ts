@@ -503,14 +503,14 @@ export class SmartThingsMatter {
         if (capability !== SWITCH_LEVEL_STEP) {
           applied.delete(capability === 'switch' ? 'onOff' : capability === 'switchLevel' ? 'levelControl' : 'colorControl');
         }
-        this.log.info(`Matter ${capability}.${command} accepted for ${device.name}`);
+        this.log.debug(`Matter ${capability}.${command} accepted for ${device.name}`);
       };
       const matterPower = async () => (await matter.getAccessoryState(powerUuid, 'onOff'))?.onOff ??
         binary(read(component, 'switch', 'switch')?.value, 'on', 'off');
       const step = brightnessStep(matter, device, component, send);
       const power = switchEndpoint(matter, component, componentInfo?.categories?.map(c => c.name) ?? [], send, matterPower,
         (delta, withOnOff, minLevel) => {
-          this.log.info(`Matter ${withOnOff ? 'StepWithOnOff' : 'Step'} received for ${device.name}`);
+          this.log.debug(`Matter ${withOnOff ? 'StepWithOnOff' : 'Step'} received for ${device.name}`);
           return step(delta, withOnOff, minLevel);
         }, (commands, beforeSend) => device.sendCommands(commands, undefined, false, beforeSend));
       const air = airQualityEndpoint(matter, component);

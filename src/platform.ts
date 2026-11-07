@@ -4,7 +4,6 @@ import {
 
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import axios = require('axios');
-//import { BasePlatformAccessory } from './basePlatformAccessory';
 import { MultiServiceAccessory } from './multiServiceAccessory';
 import { LocalHubClient, LocalHubCommand, LocalHubUnavailableError } from './localHubClient';
 import { LocalHubEvents, LocalDeviceEvent, describeLocalHubEventsError } from './localHubEvents';
@@ -612,14 +611,12 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
           }
           let deviceName = '';
           try {
-            // deviceName = device.label.toString().replaceAll(String.fromCharCode(8217), '\'');
             deviceName = device.label;
           } catch(error) {
             this.log.warn(`Error getting device name for ${device.label}: ${error}`);
             deviceName = device.label;
           }
           if (this.config.IgnoreDevices &&
-          //this.config.IgnoreDevices.find(d => d.replaceAll(String.fromCharCode(8217), '\'').toLowerCase() === deviceName.toLowerCase())) {
             this.config.IgnoreDevices.find(d => d.toLowerCase() === deviceName.toLowerCase())) {
             this.log.info(`Ignoring ${device.label} because it is in the Ignore Devices list`);
             return;
@@ -762,16 +759,11 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   }
 
   /**
-   * This is an example method showing how to register discovered accessories.
+   * Register discovered accessories and restore their service handlers.
    * Accessories must only be registered once, previously created accessories
    * must not be registered again to prevent "duplicate UUID" errors.
    */
   discoverDevices(devices) {
-
-    //
-    //  for now, unregister all accessories first
-    // REMOVE ME
-    // this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, this.accessories);
 
     devices.forEach((device) => {
 
@@ -793,13 +785,8 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
           this.api.updatePlatformAccessories([existingAccessory]);
 
           // create the accessory handler for the restored accessory
-          // this is imported from `platformAccessory.ts`
           this.accessoryObjects.push(this.createAccessoryObject(device, existingAccessory));
 
-          // it is possible to remove platform accessories at any time using `api.unregisterPlatformAccessories`, eg.:
-          // remove platform accessories when no longer present
-          // this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [existingAccessory]);
-          // this.log.info('Removing existing accessory from cache:', existingAccessory.displayName);
         } else {
           // the accessory does not yet exist, so we need to create it
           this.log.info('Registering new accessory: ' + device.label);
@@ -812,7 +799,6 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
           accessory.context.device = device;
 
           // create the accessory handler for the newly create accessory
-          // this is imported from `platformAccessory.ts`
 
           this.accessoryObjects.push(this.createAccessoryObject(device, accessory));
 
@@ -825,16 +811,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   }
 
   findSupportedCapability(device): boolean {
-    // Look at capabilities on main component
-    // const component = device.components.find(c => c.id === 'main');
-
-    // if (component) {
-    //   return (component.capabilities.find((ca) => MultiServiceAccessory.capabilitySupported(ca.id)));
-    // } else {
-    //   return (device.components[0].capabilities.find((ca) => MultiServiceAccessory.capabilitySupported(ca.id)));
-    // }
-
-    // Look at capabiliiies on all components
+    // Look at capabilities on all components.
 
     let found = false;
     device.components.forEach(component => {
@@ -846,15 +823,6 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   }
 
   createAccessoryObject(device, accessory): MultiServiceAccessory {
-    // const component = device.components.find(c => c.id === 'main');
-
-    // let capabilities;
-    // if (component) {
-    //   capabilities = component.capabilities;
-    // } else {
-    //   capabilities = device.components[0].capabilities;
-    // }
-
     const acc = new MultiServiceAccessory(this, accessory);
     device.components.forEach(component => {
       acc.addComponent(component.id, component.capabilities.map((c) => c.id));

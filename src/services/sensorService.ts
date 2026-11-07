@@ -4,7 +4,6 @@ import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 
 export abstract class SensorService extends BaseService {
-  statusFailureCount = 0;
   statusTranslation: (status) => CharacteristicValue | null = () => {
     return null;
   };
@@ -33,8 +32,6 @@ export abstract class SensorService extends BaseService {
 
   // Get the current state of the sensor
   async getSensorState(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     this.log.debug('Received getSensorState() event for ' + this.name);
 
     return new Promise((resolve, reject) => {
@@ -43,12 +40,10 @@ export abstract class SensorService extends BaseService {
           let value;
           try {
             value = this.statusTranslation(this.deviceStatus.status);
-            this.statusFailureCount = 0;
             this.log.debug(`State for ${this.name}: ${value}`);
             resolve(value);
             return;
           } catch {
-            this.statusFailureCount++;
             this.log.warn(`Bad status from ${this.name}.  Keeping the service available for recovery.`);
             reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.INVALID_VALUE_IN_REQUEST));
             return;
@@ -59,12 +54,4 @@ export abstract class SensorService extends BaseService {
       });
     });
   }
-
-  // public processEvent(event: ShortEvent) {
-  //   const value = this.statusTranslation(event.value);
-  //   if (this.characteristic && value) {
-  //     this.log.debug(`Updating value of ${this.name} from event to ${value}`);
-  //     this.service.updateCharacteristic(this.characteristic, value);
-  //   }
-  // }
 }

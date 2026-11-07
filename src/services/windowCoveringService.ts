@@ -100,12 +100,4 @@ export class WindowCoveringService extends BaseService {
       this.service.updateCharacteristic(this.platform.Characteristic.PositionState, this.currentPositionState);
     }
   }
-
-
-  // getPositionState(): number {
-  //   this.log.debug('GetPositionState called, value: ' + this.shadeState);
-  //   return this.shadeState;
-  // }
-
-
 }

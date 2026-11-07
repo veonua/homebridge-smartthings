@@ -1,7 +1,6 @@
 import { PlatformAccessory, Characteristic, Logger, API } from 'homebridge';
 import { IKHomeBridgeHomebridgePlatform } from './platform';
 import { BaseService } from './services/baseService';
-// import { BasePlatformAccessory } from './basePlatformAccessory';
 import { MotionService } from './services/motionService';
 import { BatteryService } from './services/batteryService';
 import { TemperatureService } from './services/temperatureService';
@@ -33,7 +32,6 @@ import { LocalHubUnavailableError } from './localHubClient';
  * An instance of this class is created for each accessory your platform registers
  * Each accessory may expose multiple services of different service types.
  */
-// export class MultiServiceAccessory extends BasePlatformAccessory {
 interface Component {
   componentId: string;
   capabilities: string[];
@@ -201,7 +199,6 @@ export class MultiServiceAccessory {
   protected log: Logger;
   protected api: API;
   protected online = true;
-  //protected deviceStatus: DeviceStatus = { timestamp: 0, status: undefined };
   protected deviceStatusTimestamp = 0;
   protected failureCount = 0;
   protected commandInProgress = false;
@@ -262,10 +259,8 @@ export class MultiServiceAccessory {
     optionalCapabilities: string[],
     serviceConstructor: new (...args: any[]) => BaseService,
   ): string[] {
-    // this.log.debug(`Testing ${serviceConstructor.name} for capabilities ${capabilitiesToCover}`);
     // ignore services which cannot cover all required capabilities
     if (!capabilities.every(e => capabilitiesToCover.includes(e))) {
-      // this.log.debug(`Ignoring ${serviceConstructor.name}`);
       return capabilitiesToCover;
     }
 
@@ -331,10 +326,6 @@ export class MultiServiceAccessory {
       return false;
     }
   }
-
-  // public async refreshStatus(): Promise<boolean> {
-  //   return super.refreshStatus();
-  // }
 
   // Called by subclasses to refresh the status for the device.  Will only refresh if it has been more than
   // 4 seconds since last refresh

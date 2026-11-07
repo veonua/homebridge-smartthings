@@ -21,7 +21,6 @@ export class ThermostatService extends BaseService {
 
     const component = this.multiServiceAccessory.components.find((c) => c.componentId === componentId);
     if (component && component.capabilities.find((cap) => cap === 'thermostatOperatingState')) {
-    //if (this.multiServiceAccessory.capabilities.find((c) => c.id === 'thermostatOperatingState')) {
       this.supportsOperatingState = true;
     }
     this.service.getCharacteristic(platform.Characteristic.CurrentHeatingCoolingState)
